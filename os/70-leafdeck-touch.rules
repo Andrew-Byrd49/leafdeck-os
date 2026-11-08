@@ -1,0 +1,10 @@
+# Leafdeck OS: map each built-in touchscreen and pen to its own panel, so a touch lands on the screen you touched when
+# Leafdeck uses both (Settings → Leafdeck OS → Screen → Both built-in screens). The compositor (cage, through wlroots and
+# libinput) reads WL_OUTPUT. Without this, every touchscreen covers the whole desktop: a tap on the top panel lands
+# halfway up both. Installed by os/setup-fedora.sh to /etc/udev/rules.d/.
+
+# Lenovo Yoga Book 9: the top panel is eDP-1, the bottom one eDP-2.
+ACTION!="remove", SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="*Gadget Serial and keyboard Touchscreen Top", ENV{WL_OUTPUT}="eDP-1"
+ACTION!="remove", SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="*Gadget Serial and keyboard Stylus Top", ENV{WL_OUTPUT}="eDP-1"
+ACTION!="remove", SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="*Gadget Serial and keyboard Touchscreen Bottom", ENV{WL_OUTPUT}="eDP-2"
+ACTION!="remove", SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="*Gadget Serial and keyboard Stylus Bottom", ENV{WL_OUTPUT}="eDP-2"

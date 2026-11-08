@@ -1,0 +1,79 @@
+# Leafdeck OS: the system image (os/ARCHITECTURE.md). Fedora's bootc base supplies the kernel, drivers, systemd and
+# security updates; this adds everything that makes it Leafdeck OS. Computers get it as a whole: installed once, then
+# updated to each new image with `bootc upgrade` (rolled back if it doesn't boot). /usr is read-only on the computer, so
+# everything Leafdeck ships lives under /usr, and /etc only holds defaults the computer can change.
+#
+# Built by os/image/build.sh, which stages the Leafdeck app and os/ files next to this file first.
+
+# Leafdeck's cage (os/cage/build.sh): stock cage with Leafdeck OS's patches, touch per screen and programs' real
+# windows in Leafdeck frames. Built on Fedora of the same release, so it links against the image's wlroots.
+FROM quay.io/fedora/fedora:44 AS cage
+COPY cage/*.patch /src/patches/
+RUN dnf -y install git meson ninja-build gcc wlroots-devel wayland-devel wayland-protocols-devel libxkbcommon-devel \
+      libinput-devel pixman-devel \
+ && git clone -q --depth 1 --branch v0.3.1 https://github.com/cage-kiosk/cage.git /src/cage \
+ && git -C /src/cage apply /src/patches/touch-output.patch /src/patches/native-windows.patch \
+ && meson setup /src/cage/build /src/cage -Dman-pages=disabled --buildtype=release \
+ && ninja -C /src/cage/build
+
+FROM quay.io/fedora/fedora-bootc:44
+
+# Graphics, sound, networking, Bluetooth, power and sensors; fonts; what Leafdeck's Electron needs; the login daemon;
+# Node for leafdeckd.
+# cage stays until Leafdeck's own compositor replaces it; the package brings what it needs, and Leafdeck's build of it
+# goes over its program below. Xwayland: programs that only speak X11 (Spotify). wayvnc: the app display, the fallback
+# for programs' windows when the compositor isn't Leafdeck's (electron/appdisplay.cjs).
+# Then the base image's server and cloud parts go, since nothing in Leafdeck uses them (about 360 MB): network file
+# shares, other CPUs' emulators for containers, cloud metadata and its AWS libraries, toolbox, enterprise sign-in
+# (Active Directory, FreeIPA, LDAP, Kerberos) and Node's documentation.
+RUN dnf -y install \
+      greetd greetd-selinux cage wayvnc xorg-x11-server-Xwayland wlr-randr grim brightnessctl \
+      mesa-dri-drivers mesa-vulkan-drivers \
+      pipewire wireplumber pipewire-pulseaudio pipewire-alsa alsa-sof-firmware \
+      NetworkManager-wifi NetworkManager-bluetooth iwlwifi-mvm-firmware bluez upower iio-sensor-proxy tuned-ppd \
+      python3 python3-gobject nodejs24 efibootmgr xdg-utils \
+      udisks2 exfatprogs dosfstools ntfs-3g unzip 7zip bzip2 xz zstd \
+      gtk3 nss libnotify libXtst at-spi2-core libdrm mesa-libgbm alsa-lib cups-libs \
+      cups cups-client cups-filters-driverless ipp-usb avahi \
+      default-fonts-core-sans google-noto-sans-fonts google-noto-color-emoji-fonts glibc-langpack-en \
+      plymouth plymouth-theme-spinner zram-generator-defaults nss-mdns \
+      python3-pywhispercpp \
+ && dnf -y remove nfs-utils nfsv3-client-utils nfs-client-utils rpcbind \
+      'qemu-user-static*' NetworkManager-cloud-setup python3-botocore toolbox \
+      sssd-ad sssd-ipa sssd-ldap sssd-krb5 nodejs24-docs \
+ && dnf clean all && rm -rf /var/cache/* /var/log/*
+
+# Boot screen: Leafdeck's Plymouth theme (os/plymouth/leafdeck), with the Spinner theme's spinner and password-prompt
+# images. It's in the initramfs, so it shows from the start.
+COPY rootfs/usr/share/plymouth/ /usr/share/plymouth/
+RUN cd /usr/share/plymouth/themes/spinner \
+ && cp animation-*.png throbber-*.png bullet.png entry.png lock.png capslock.png keyboard.png keymap-render.png ../leafdeck/ \
+ && sed -i 's/^Theme=.*/Theme=leafdeck/' /usr/share/plymouth/plymouthd.defaults
+
+# Leafdeck OS's own initramfs (the first stage of startup), built for what this image contains
+# (rootfs/usr/lib/dracut/dracut.conf.d/50-leafdeck.conf). Before the app, so app changes don't rebuild it. The system's
+# users and groups live in /usr/lib/{passwd,group}; the initramfs reads only /etc, so they're merged in while it's built.
+COPY rootfs/usr/lib/dracut/ /usr/lib/dracut/
+RUN kver=$(ls /usr/lib/modules) \
+ && cp -a /etc/passwd /etc/group /tmp/ \
+ && cat /usr/lib/passwd >> /etc/passwd && cat /usr/lib/group >> /etc/group \
+ && dracut --no-hostonly --kver "$kver" --reproducible --force "/usr/lib/modules/$kver/initramfs.img" \
+ && cp -a /tmp/passwd /tmp/group /etc/ && rm -f /tmp/passwd /tmp/group
+
+# Leafdeck itself (the packaged app), and the OS files: session, setup, services, branding.
+COPY leafdeck/ /usr/lib/leafdeck/
+# Leafdeck's cage over Fedora's (the cage stage above).
+COPY --from=cage /src/cage/build/cage /usr/bin/cage
+COPY rootfs/ /
+
+# The boot menu stays hidden (hold Shift or Esc to see it; it also shows after a failed boot), as on Fedora Workstation.
+# bootupd copies this to the disk at install. /usr/local/sbin: a boot-time tmpfiles rule expects it, and /usr can't be
+# written once installed.
+RUN sed -i 's/^set timeout_style=menu$/set timeout_style=hidden/' /usr/lib/bootupd/grub2-static/grub-static-pre.cfg \
+ && grep -q '^set timeout_style=hidden$' /usr/lib/bootupd/grub2-static/grub-static-pre.cfg \
+ && systemctl enable greetd.service leafdeck-setup.service cups.service avahi-daemon.service \
+ && systemctl --global enable leafdeckd.service \
+ && mkdir -p /usr/local/sbin \
+ && systemctl set-default graphical.target \
+ && ln -s ../lib/leafdeck/leafdeck /usr/bin/leafdeck \
+ && bootc container lint

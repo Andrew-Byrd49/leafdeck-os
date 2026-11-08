@@ -1,0 +1,271 @@
+/* Leafdeck's surface layer: layered panels, crisp tactile controls and accent glows.
+   Loaded after app.css and only restyles what's already there (no layout changes); remove the <link> to go back.
+   Every glow comes from --accent, so it follows the user's accent color, and light and dark come from
+   light-dark(<light>, <dark>) like the rest of the UI. The menu bar, dock and widgets keep their own look. */
+
+:root {
+  --radius: 12px;
+  /* Crisp tactile controls: a lit top edge and a shaded bottom edge. */
+  --bevel: inset 0 1px 0 light-dark(#ffffff, rgba(255, 255, 255, 0.09)), inset 0 -1px 0 light-dark(rgba(0, 0, 0, 0.07), rgba(0, 0, 0, 0.32));
+  --pill: linear-gradient(180deg, light-dark(#ffffff, rgba(255, 255, 255, 0.1)), light-dark(#eff0ef, rgba(255, 255, 255, 0.05)));
+  --pill-hover: linear-gradient(180deg, light-dark(#ffffff, rgba(255, 255, 255, 0.14)), light-dark(#e7e9e7, rgba(255, 255, 255, 0.075)));
+  --pill-edge: light-dark(rgba(0, 0, 0, 0.13), rgba(255, 255, 255, 0.11));
+  --pill-drop: 0 1px 1.5px light-dark(rgba(0, 0, 0, 0.1), rgba(0, 0, 0, 0.4));
+  /* Sunken wells (tracks, search fields). */
+  --well: light-dark(rgba(0, 0, 0, 0.055), rgba(0, 0, 0, 0.3));
+  --pressed: inset 0 1px 2px light-dark(rgba(0, 0, 0, 0.1), rgba(0, 0, 0, 0.5)), inset 0 0 0 0.5px light-dark(rgba(0, 0, 0, 0.09), rgba(255, 255, 255, 0.07));
+  /* Lit top edge for raised panels and popovers. */
+  --lit: inset 0 1px 0 light-dark(rgba(255, 255, 255, 0.95), rgba(255, 255, 255, 0.07));
+  /* Glows built from the accent. */
+  --glow-row: linear-gradient(90deg, color-mix(in srgb, var(--accent) 26%, transparent), color-mix(in srgb, var(--accent) 10%, transparent) 65%, color-mix(in srgb, var(--accent) 4%, transparent));
+  --glow-edge: inset 0 0 0 1px color-mix(in srgb, var(--accent) 85%, transparent);
+  --glow-line: linear-gradient(90deg, transparent, color-mix(in srgb, var(--accent) 85%, transparent) 50%, transparent);
+  --accent-text: light-dark(color-mix(in srgb, var(--accent) 70%, #000), color-mix(in srgb, var(--accent) 80%, #fff));
+  --popover: light-dark(rgba(247, 248, 248, 0.94), rgba(34, 36, 40, 0.92));
+  --popover-shadow: var(--lit), 0 0 0 0.5px light-dark(rgba(0, 0, 0, 0.12), rgba(0, 0, 0, 0.6)), 0 16px 40px light-dark(rgba(0, 0, 0, 0.18), rgba(0, 0, 0, 0.5));
+}
+
+/* ================= Windows ================= */
+
+.win {
+  border-color: light-dark(rgba(0, 0, 0, 0.12), rgba(255, 255, 255, 0.12));
+  box-shadow: var(--lit), 0 0 0 0.5px light-dark(rgba(0, 0, 0, 0.3), rgba(0, 0, 0, 0.85)), 0 24px 60px light-dark(rgba(0, 0, 0, 0.18), rgba(0, 0, 0, 0.5)), 0 6px 14px light-dark(rgba(0, 0, 0, 0.1), rgba(0, 0, 0, 0.3));
+}
+.win:not(.active) { box-shadow: inset 0 1px 0 light-dark(rgba(255, 255, 255, 0.8), rgba(255, 255, 255, 0.045)), 0 0 0 0.5px light-dark(rgba(0, 0, 0, 0.26), rgba(0, 0, 0, 0.75)), 0 14px 34px light-dark(rgba(0, 0, 0, 0.13), rgba(0, 0, 0, 0.35)); }
+/* The title bar's edge glows in the accent at its center, on the window you're using. */
+.win-bar { position: relative; border-bottom-color: transparent; background: light-dark(rgba(255, 255, 255, 0.5), rgba(255, 255, 255, 0.022)); }
+.win:is([data-app="terminal"], [data-app^="terminal:"]):has(.term) > .win-bar { background-image: linear-gradient(light-dark(rgba(255, 255, 255, 0.5), rgba(255, 255, 255, 0.022)) 0 0); } /* its tint, over the solid bar */
+.win-bar::after { content: ''; position: absolute; left: 0; right: 0; bottom: -0.5px; height: 1px; background: linear-gradient(90deg, transparent, var(--line-2) 14%, var(--line-2) 86%, transparent); pointer-events: none; }
+.win.active .win-bar::after { background: linear-gradient(90deg, transparent, var(--line-2) 10%, color-mix(in srgb, var(--accent) 80%, var(--line-2)) 50%, var(--line-2) 90%, transparent); }
+.win.burner .win-bar::after, .win.web-fullscreen .win-bar::after { display: none; }
+
+/* Window tabs (same-site windows): a lit top edge; the open tab carries a thin accent line on top. */
+.win-tab { box-shadow: inset 0 1px 0 light-dark(rgba(255, 255, 255, 0.8), rgba(255, 255, 255, 0.05)); }
+.win-tab.on { position: relative; }
+.win-tab.on::before { content: ''; position: absolute; left: 12px; right: 12px; top: 0; height: 1.5px; border-radius: 1px; background: var(--glow-line); }
+
+/* ================= Controls ================= */
+
+.btn, .tb-pill {
+  border-radius: 9px;
+  background: var(--pill);
+  border: 0.5px solid var(--pill-edge);
+  box-shadow: var(--bevel), var(--pill-drop);
+}
+.btn.small, .tb-pill { border-radius: 8px; }
+.btn:hover, .tb-pill:hover { background: var(--pill-hover); }
+.btn:active, .tb-pill:active { box-shadow: var(--pressed); background: light-dark(#e9ebea, rgba(255, 255, 255, 0.05)); }
+.btn.primary, .tb-pill.primary, .toast-act {
+  color: var(--accent-ink);
+  border-color: color-mix(in srgb, var(--accent) 65%, #000);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 80%, #fff), var(--accent) 52%, color-mix(in srgb, var(--accent) 86%, #000));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.4), inset 0 -1px 0 rgba(0, 0, 0, 0.18), 0 2px 8px color-mix(in srgb, var(--accent) 30%, transparent), var(--pill-drop);
+}
+.btn.primary:hover, .tb-pill.primary:hover { filter: brightness(1.05); background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 76%, #fff), var(--accent) 52%, color-mix(in srgb, var(--accent) 88%, #000)); }
+.btn.primary:active, .tb-pill.primary:active { box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.28); }
+.btn.danger.confirm, .btn.danger-solid, .btn.primary.danger-solid, .tb-btn.confirm { color: #fff; background: linear-gradient(180deg, #ff6a60, #ff453a 55%, #e3352b); border-color: #c22a21; box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.32), 0 2px 8px rgba(255, 69, 58, 0.3); }
+.btn:disabled, .tb-pill:disabled { box-shadow: none; }
+.icon-btn { border-radius: 7px; }
+
+/* Title-bar icon buttons stay quiet and get a crisp raised tile on hover. */
+.tb-btn { border-radius: 8px; }
+.tb-btn:hover { background: var(--pill-hover); box-shadow: var(--bevel); }
+
+/* Segmented controls: a sunken track with a raised, lit thumb. */
+.seg { padding: 2px; border-radius: 9px; background: var(--well); box-shadow: var(--pressed); }
+.seg button { border-radius: 7px; }
+.seg button.on { background: var(--pill); box-shadow: var(--bevel), 0 1px 2px light-dark(rgba(0, 0, 0, 0.16), rgba(0, 0, 0, 0.5)); color: var(--text); }
+
+/* Title-bar selects. */
+.tb-select { padding: 0 10px; border-radius: 8px; background: var(--pill); border: 0.5px solid var(--pill-edge); box-shadow: var(--bevel); }
+
+/* Wells with an accent line that glows underneath while you type: title-bar search and the address bar. */
+.tb-search, .tb-address { position: relative; border-radius: 9px; background: var(--well); box-shadow: var(--pressed); }
+.tb-search::after, .tb-address::after { content: ''; position: absolute; left: 12px; right: 12px; bottom: -3px; height: 1px; background: var(--glow-line); opacity: 0; transition: opacity 0.2s; pointer-events: none; }
+.tb-search:focus-within, .tb-address:focus-within { box-shadow: var(--pressed), 0 0 0 2px var(--accent-soft); }
+.tb-search:focus-within::after, .tb-address:focus-within::after { opacity: 1; }
+.tb-url { border-radius: 8px; background: var(--well); box-shadow: var(--pressed); }
+
+/* Fields: crisp sunken wells. */
+.field input:not([type='checkbox']):not([type='radio']), .field select, .field textarea,
+.settings input:not([type='checkbox']):not([type='file']), .settings textarea {
+  border-radius: 8px;
+  box-shadow: inset 0 1px 2px light-dark(rgba(0, 0, 0, 0.07), rgba(0, 0, 0, 0.35));
+}
+
+/* Switches: a sunken track, a lit thumb, and an accent gradient when on. */
+.switch span { background: var(--well); box-shadow: var(--pressed); }
+.switch span::after { background: linear-gradient(180deg, #ffffff, #eceeed); box-shadow: inset 0 -1px 0 rgba(0, 0, 0, 0.08), 0 1px 3px rgba(0, 0, 0, 0.35); }
+.switch input:checked + span { background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 85%, #fff), var(--accent)); box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.18), 0 0 8px color-mix(in srgb, var(--accent) 30%, transparent); }
+
+/* Chips stay pills, with the two-tone outline (accent into blue). */
+.chip-btn {
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background:
+    linear-gradient(light-dark(#f7f8f7, #232427), light-dark(#f7f8f7, #232427)) padding-box,
+    linear-gradient(115deg, color-mix(in srgb, var(--accent) 60%, transparent), light-dark(rgba(26, 111, 214, 0.4), rgba(100, 168, 255, 0.45))) border-box;
+  color: var(--text);
+}
+.chip-btn:hover { color: var(--text); background:
+    linear-gradient(light-dark(#ffffff, #2a2b2f), light-dark(#ffffff, #2a2b2f)) padding-box,
+    linear-gradient(115deg, var(--accent), light-dark(rgba(26, 111, 214, 0.7), rgba(100, 168, 255, 0.75))) border-box; }
+
+/* Progress bars: an accent gradient with a lit edge. */
+.progress { background: var(--well); box-shadow: var(--pressed); }
+.progress i { background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 70%, transparent), var(--accent)); box-shadow: 0 0 6px color-mix(in srgb, var(--accent) 40%, transparent); }
+
+/* ================= Selection: the glow row, everywhere ================= */
+
+.ab-item, .bm-folder, .pl-nav-item, .sr-item, .addr-item, .menu-item { border-radius: 9px; }
+.ab-item.on, .bm-folder.on, .pl-nav-item.on, .sr-item.on, .addr-item.on, .menu-item:hover:not(:disabled) {
+  background: var(--glow-row);
+  color: var(--accent-text);
+  box-shadow: var(--glow-edge);
+}
+.ab-item.on b, .sr-item.on b, .addr-item.on b { color: var(--accent-text); }
+.sr-item.on small, .addr-item.on small { color: var(--text-3); }
+.sr-item.on .sr-glyph { background: color-mix(in srgb, var(--accent) 22%, transparent); color: var(--accent-text); }
+.addr-item.on > .ic, .pl-nav-item.on .ic, .menu-item:hover:not(:disabled) .ic { color: var(--accent-text); }
+.ab-item.on .app-icon { box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--accent) 50%, transparent); border-radius: 26%; }
+.nt-item { border-radius: 10px; }
+.nt-item.on {
+  background: var(--glow-row);
+  border-color: transparent;
+  box-shadow: var(--glow-edge), 0 2px 8px light-dark(rgba(0, 0, 0, 0.06), rgba(0, 0, 0, 0.2));
+}
+.nt-item.on .nt-item-text b { color: var(--accent-text); }
+.hist-row, .dl-row { border-radius: 9px; }
+
+/* Section labels: small, spaced capitals. */
+.ab-side h5, .pl-nav-h, .settings h3, .sr-group h5, .hist h4 { font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-3); }
+.settings h3 .ic { color: var(--accent); }
+
+/* ================= Panels ================= */
+
+/* Sidebars float as their own panel inside the window, a step lighter than the page. */
+.ab-side, .pl-nav, .bm-folders {
+  margin: 8px 0 8px 8px;
+  border: 0.5px solid light-dark(rgba(0, 0, 0, 0.08), rgba(255, 255, 255, 0.08));
+  border-radius: 12px;
+  background: light-dark(rgba(255, 255, 255, 0.78), rgba(255, 255, 255, 0.032));
+  box-shadow: var(--lit), 0 1px 2px light-dark(rgba(0, 0, 0, 0.05), rgba(0, 0, 0, 0.28));
+}
+
+/* Raised panels share the lit top edge. */
+.set-group, .ab-card, .ab-hero, .ac, .stat, .imp-src, .dl-row, .ua-consent, .perm-bar { box-shadow: var(--lit); }
+.set-group, .ab-card, .ab-hero, .ac { border-radius: 12px; }
+.stat { border-radius: 11px; }
+.set-row { border-bottom-color: light-dark(rgba(0, 0, 0, 0.07), rgba(255, 255, 255, 0.06)); }
+.board-col { border-radius: 12px; box-shadow: var(--lit); }
+.card { border-radius: 9px; box-shadow: var(--bevel), 0 1px 2px light-dark(rgba(0, 0, 0, 0.08), rgba(0, 0, 0, 0.32)); }
+.imp-src { border-radius: 9px; }
+.imp-src:hover { background: var(--glow-row); box-shadow: var(--glow-edge); }
+
+/* Tables: a crisper header with an accent hairline under it. */
+.tbl th { border-bottom: 0; box-shadow: inset 0 -1px 0 var(--line-2); }
+
+/* ================= Popovers: search, address suggestions, menus, toasts, sheets ================= */
+
+.search-results, .addr-suggest, .menu { background: var(--popover); box-shadow: var(--popover-shadow); }
+.search-results { border-radius: 12px; }
+.addr-suggest, .menu { border-radius: 10px; }
+/* The search popup and address suggestions get the glowing line along their top edge. */
+.search-results::before, .addr-suggest::before { content: ''; position: sticky; display: block; top: -6px; height: 1px; margin: -6px 18% 5px; background: var(--glow-line); opacity: 0.8; z-index: 1; }
+.menu-sep { background: linear-gradient(90deg, transparent, var(--line-2) 15%, var(--line-2) 85%, transparent); }
+
+.toast { border-radius: 10px; background: var(--popover); box-shadow: var(--popover-shadow); position: relative; overflow: hidden; }
+.toast::before { content: ''; position: absolute; left: 0; right: 0; top: 0; height: 1px; background: var(--glow-line); }
+.toast.error::before { background: linear-gradient(90deg, transparent, rgba(255, 105, 97, 0.9) 50%, transparent); }
+
+/* Sheets (record forms) drop from the title bar with a lit edge and a glowing divider above the buttons. */
+.sheet { border-radius: 0 0 12px 12px; box-shadow: var(--lit), 0 20px 50px light-dark(rgba(0, 0, 0, 0.22), rgba(0, 0, 0, 0.55)); }
+.sheet-foot { position: relative; border-top-color: transparent; }
+.sheet-foot::before { content: ''; position: absolute; left: 0; right: 0; top: -0.5px; height: 1px; background: linear-gradient(90deg, transparent, var(--line-2) 12%, color-mix(in srgb, var(--accent) 55%, var(--line-2)) 50%, var(--line-2) 88%, transparent); }
+
+/* The permission bar for sites (camera, location…): an accent glow along its edge. */
+.perm-bar { border-color: color-mix(in srgb, var(--accent) 35%, var(--line-2)); }
+
+/* ================= The App Builder chat ================= */
+
+.ac-compose { padding: 12px; }
+.ac-compose textarea {
+  border-radius: 10px;
+  border: 1.5px solid transparent;
+  background:
+    linear-gradient(light-dark(#ffffff, #1b1c1f), light-dark(#ffffff, #1b1c1f)) padding-box,
+    linear-gradient(110deg, color-mix(in srgb, var(--accent) 85%, transparent), color-mix(in srgb, var(--accent) 35%, transparent) 60%, color-mix(in srgb, var(--accent) 75%, transparent)) border-box;
+}
+.ac-compose textarea:focus { box-shadow: 0 0 0 3px var(--accent-soft), 0 4px 14px color-mix(in srgb, var(--accent) 18%, transparent); }
+.ac-send { border-radius: 10px; }
+.ac-user { border-radius: 12px 12px 4px 12px; background: var(--glow-row); border: 0.5px solid color-mix(in srgb, var(--accent) 30%, transparent); }
+.ac-ask { border-radius: 12px; box-shadow: var(--lit), 0 4px 14px light-dark(rgba(0, 0, 0, 0.08), rgba(0, 0, 0, 0.3)); }
+
+/* ================= Glow ================= */
+/* A second pass that makes the accent glow through the whole UI: halos on what's active or focused,
+   soft accent light on panels, blooms on the glowing lines. Tune all of it from these three values. */
+:root {
+  --glow-soft: color-mix(in srgb, var(--accent) 16%, transparent);
+  --glow-mid: color-mix(in srgb, var(--accent) 32%, transparent);
+  --glow-strong: color-mix(in srgb, var(--accent) 55%, transparent);
+  /* Soft accent light falling from the top-left corner of a panel. */
+  --panel-light: radial-gradient(130% 90% at 0% 0%, color-mix(in srgb, var(--accent) 8%, transparent), transparent 62%);
+}
+
+/* The window you're using: an accent halo around the frame, and a bloom on the title-bar line. */
+.win.active { box-shadow: var(--lit), 0 0 0 0.5px color-mix(in srgb, var(--accent) 30%, light-dark(rgba(0, 0, 0, 0.3), rgba(0, 0, 0, 0.85))), 0 0 28px var(--glow-soft), 0 24px 60px light-dark(rgba(0, 0, 0, 0.18), rgba(0, 0, 0, 0.5)), 0 6px 14px light-dark(rgba(0, 0, 0, 0.1), rgba(0, 0, 0, 0.3)); }
+.win.active .win-bar::after { box-shadow: 0 0 10px 0.5px var(--glow-mid); }
+.win.burner.active, .win.web-fullscreen { box-shadow: none; }
+
+/* Selected rows glow beyond their edges. */
+.ab-item.on, .bm-folder.on, .pl-nav-item.on, .sr-item.on, .addr-item.on, .menu-item:hover:not(:disabled), .nt-item.on, .imp-src:hover {
+  box-shadow: var(--glow-edge), 0 0 14px var(--glow-soft);
+}
+.ab-item.on b, .pl-nav-item.on span, .sr-item.on b, .nt-item.on .nt-item-text b { text-shadow: 0 0 12px var(--glow-mid); }
+
+/* Buttons: a stronger halo on primary actions, an accent rim on hover for the rest. */
+.btn.primary, .tb-pill.primary, .toast-act { box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.4), inset 0 -1px 0 rgba(0, 0, 0, 0.18), 0 0 0 0.5px var(--glow-mid), 0 2px 16px var(--glow-strong); }
+.btn.primary:hover, .tb-pill.primary:hover { box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.45), inset 0 -1px 0 rgba(0, 0, 0, 0.18), 0 0 0 0.5px var(--glow-strong), 0 2px 22px var(--glow-strong); }
+.btn:not(.primary):not(.danger-solid):not(.confirm):hover, .tb-pill:not(.primary):hover, .tb-btn:hover { box-shadow: var(--bevel), 0 0 0 0.5px var(--glow-mid), 0 0 12px var(--glow-soft); }
+.btn:focus-visible, .tb-pill:focus-visible, .tb-btn:focus-visible { outline: none; box-shadow: var(--bevel), 0 0 0 2px var(--glow-strong), 0 0 16px var(--glow-mid); }
+
+/* The active view in a switcher: a lit thumb with an accent rim. */
+.seg button.on { box-shadow: var(--bevel), 0 0 0 0.5px var(--glow-mid), 0 0 10px var(--glow-soft); color: var(--accent-text); }
+
+/* Focused fields, searches and the address bar: a real glow ring. */
+.field input:not([type='checkbox']):not([type='radio']):focus, .field select:focus, .field textarea:focus,
+.settings input:not([type='checkbox']):not([type='file']):focus, .settings textarea:focus {
+  box-shadow: inset 0 1px 2px light-dark(rgba(0, 0, 0, 0.07), rgba(0, 0, 0, 0.35)), 0 0 0 3px var(--glow-soft), 0 0 16px var(--glow-mid);
+}
+.tb-search:focus-within, .tb-address:focus-within { box-shadow: var(--pressed), 0 0 0 1px var(--glow-mid), 0 0 18px var(--glow-mid); }
+.tb-search::after, .tb-address::after { box-shadow: 0 0 8px var(--glow-mid); }
+
+/* Switches glow when on; progress bars glow along their fill. */
+.switch input:checked + span { box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.18), 0 0 12px var(--glow-mid); }
+.progress i { box-shadow: 0 0 10px var(--glow-strong); }
+
+/* Panels catch a soft accent light from the top-left. */
+.ab-side, .pl-nav, .bm-folders, .set-group, .ab-card, .stat, .board-col, .ua-consent, .dl-row { background-image: var(--panel-light); }
+.ab-hero { background: radial-gradient(120% 140% at 0% 0%, var(--glow-mid), transparent 60%), var(--field); box-shadow: var(--lit), 0 0 30px var(--glow-soft); }
+.stat.good, .stat.bad, .stat.warn { background-image: none; }
+
+/* Popovers, menus and toasts: an accent bloom on the top edge and a faint accent ambience. */
+.search-results, .addr-suggest, .menu, .toast { box-shadow: var(--popover-shadow), 0 0 30px var(--glow-soft); }
+.search-results::before, .addr-suggest::before, .toast::before { box-shadow: 0 0 10px 1px var(--glow-mid); opacity: 1; }
+.sheet { box-shadow: var(--lit), 0 0 30px var(--glow-soft), 0 20px 50px light-dark(rgba(0, 0, 0, 0.22), rgba(0, 0, 0, 0.55)); }
+.sheet-foot::before { box-shadow: 0 0 8px var(--glow-mid); }
+
+/* Window tabs and chips: the open tab's top line blooms; chips glow on hover. */
+.win-tab.on::before { box-shadow: 0 0 8px 1px var(--glow-mid); }
+.chip-btn:hover { box-shadow: 0 0 14px var(--glow-mid); }
+
+/* The App Builder chat composer glows like the reference's hero input. */
+.ac-compose textarea { box-shadow: 0 0 18px var(--glow-soft); }
+.ac-compose textarea:focus { box-shadow: 0 0 0 3px var(--glow-soft), 0 0 26px var(--glow-mid); }
+.ac.busy { box-shadow: var(--lit), 0 0 0 0.5px var(--glow-mid), 0 0 22px var(--glow-soft); }
+
+/* Color swatches: a lit bead, and the chosen one glows in its own color. */
+.swatch span { box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35), inset 0 -1px 1px rgba(0, 0, 0, 0.2); }
+.swatch input:checked + span { outline: 1.5px solid var(--c1); outline-offset: 2.5px; box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35), 0 0 14px var(--c1); }
+.accent-dot { box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35), inset 0 -1px 1px rgba(0, 0, 0, 0.2); }
+.accent-dot.on { outline: 1.5px solid var(--c); outline-offset: 2.5px; box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35), 0 0 14px var(--c); }

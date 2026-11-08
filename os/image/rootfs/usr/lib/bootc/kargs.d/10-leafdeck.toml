@@ -1,0 +1,5 @@
+# Leafdeck OS kernel arguments (bootc applies changes to these on update).
+# - A quiet boot with the Leafdeck boot screen (rhgb): no kernel or audit messages over it; problems still go to the journal.
+# - systemd.gpt_auto=0: systemd's partition discovery would mount the EFI partition over /boot, which bootc manages
+#   itself, and updates then can't be finished at shutdown. The root is found by its UUID anyway.
+kargs = ["rhgb", "quiet", "loglevel=3", "systemd.show_status=error", "rd.udev.log_level=3", "systemd.gpt_auto=0"]

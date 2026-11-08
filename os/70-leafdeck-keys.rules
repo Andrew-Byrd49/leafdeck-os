@@ -1,0 +1,5 @@
+# Leafdeck OS: keys the kernel drops. The Lenovo Yoga Book 9 Bluetooth keyboard sends Fn+PrtSc as a consumer-control
+# code outside the range its own descriptor declares, so it never becomes a key event. Leafdeck reads that keyboard's
+# hidraw node to catch it (electron/oskeys.cjs); uaccess lets the signed-in user on the active seat read it, nobody else.
+# Installed by os/setup-fedora.sh to /etc/udev/rules.d/.
+ACTION!="remove", SUBSYSTEM=="hidraw", SUBSYSTEMS=="hid", KERNELS=="0005:17EF:616A.*", TAG+="uaccess"

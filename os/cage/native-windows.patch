@@ -1,0 +1,1898 @@
+diff --git a/cage.c b/cage.c
+index f4b661d..ee3183a 100644
+--- a/cage.c
++++ b/cage.c
+@@ -58,6 +58,7 @@
+ #include "seat.h"
+ #include "server.h"
+ #include "view.h"
++#include "leafdeck.h"
+ #include "xdg_shell.h"
+ #if CAGE_HAS_XWAYLAND
+ #include "xwayland.h"
+@@ -375,6 +376,8 @@ main(int argc, char *argv[])
+ 		goto end;
+ 	}
+ 
++	server.shell_layer = wlr_scene_tree_create(&server.scene->tree);
++	server.native_layer = wlr_scene_tree_create(&server.scene->tree);
+ 	server.scene_output_layout = wlr_scene_attach_output_layout(server.scene, server.output_layout);
+ 
+ 	struct wlr_compositor *compositor = wlr_compositor_create(server.wl_display, 6, server.renderer);
+@@ -608,6 +611,8 @@ main(int argc, char *argv[])
+ 		goto end;
+ 	}
+ 
++	leafdeck_init(&server, socket); // before the client starts: it gets LEAFDECK_COMPOSITOR
++
+ 	if (setenv("WAYLAND_DISPLAY", socket, true) < 0) {
+ 		wlr_log_errno(WLR_ERROR, "Unable to set WAYLAND_DISPLAY. Clients may not be able to connect");
+ 	} else {
+@@ -664,6 +669,7 @@ end:
+ 	if (sigchld_source) {
+ 		wl_event_source_remove(sigchld_source);
+ 	}
++	leafdeck_finish(&server);
+ 	seat_destroy(server.seat);
+ 	/* This function is not null-safe, but we only ever get here
+ 	   with a proper wl_display. */
+diff --git a/leafdeck.c b/leafdeck.c
+new file mode 100644
+index 0000000..7976b2d
+--- /dev/null
++++ b/leafdeck.c
+@@ -0,0 +1,1400 @@
++/*
++ * Leafdeck OS: the real windows of programs, inside Leafdeck's own window frames. See leafdeck.h.
++ *
++ * The control socket speaks lines. Leafdeck sends commands, separated by spaces:
++ *   shell <pid>                  Leafdeck's process: from now on other clients' toplevels are native windows
++ *   main <title>                 Leafdeck's main window is the one with this title (Leafdeck sets it for a moment)
++ *   screen <title> <output>      the Leafdeck window with this title fills that screen (connector name) and only it,
++ *                                drawn at its scale, below the programs' windows like the main one (- : any again);
++ *                                a window that isn't there yet gets it as it opens (so it never covers every screen)
++ *   mainscreen <output>          the same for the main window (- : all screens again)
++ *   screenfocus <output>         keyboard focus to the Leafdeck window of that screen
++ *   list                         announce every native window again (after Leafdeck restarts)
++ *   place <id> <x> <y> <w> <h>   show it there, that size (Leafdeck's main-window coordinates)
++ *   hide <id>
++ *   cover <id> [<x> <y> <w> <h>]...   the areas where Leafdeck's UI is in front of it
++ *   order <id>...                stacking, bottom to top
++ *   focus <id>                   keyboard focus (0: Leafdeck)
++ *   close <id>
++ *   fullscreen <id> <0|1>
++ *   maximized <id> <0|1>         Leafdeck maximized or restored its frame (the program's own button follows)
++ *   pointer <adaptive|flat> <speed>   every mouse (not a touchpad): libinput's acceleration profile and speed, -100..100
++ *                                (Settings → Mouse). Kept for mice plugged in later, and while Leafdeck is away.
++ * and cage sends events, separated by tabs:
++ *   new <id> <parent> <pid> <w> <h> <min_w> <min_h> <app_id> <title>
++ *   title <id> <title>    appid <id> <app_id>    size <id> <w> <h>    fullscreen <id> <0|1>
++ *   focus <id>            gone <id>              main <ok|missing>     screen <output> <ok|pending>
++ *   deco <id> <ssd|csd>   whether Leafdeck draws the title bar (ssd) or the program does (csd)
++ *   grab <id> <move|resize> <edges> <x> <y>    the program's own title bar or border was pressed: Leafdeck's frame
++ *   drag <id> <x> <y>     moves or resizes with the pointer (main-window coordinates) until
++ *   dragend <id> <x> <y>
++ *   state <id> <maximize|unmaximize|minimize>  the program asked (a double click on its title bar, its buttons)
++ *   pointer <mice>        after `pointer`, and as mice come and go: how many mice have the settings
++ */
++#define _GNU_SOURCE
++
++#include "config.h"
++
++#include <errno.h>
++#include <stdarg.h>
++#include <fcntl.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <sys/socket.h>
++#include <sys/stat.h>
++#include <sys/un.h>
++#include <time.h>
++#include <unistd.h>
++#include <libinput.h>
++#include <wayland-server-core.h>
++#include <wlr/backend/libinput.h>
++#include <wlr/types/wlr_compositor.h>
++#include <wlr/types/wlr_keyboard.h>
++#include <wlr/types/wlr_output_layout.h>
++#include <wlr/types/wlr_pointer.h>
++#include <wlr/types/wlr_scene.h>
++#include <wlr/types/wlr_seat.h>
++#include <wlr/types/wlr_xdg_shell.h>
++#include <wlr/util/log.h>
++#if CAGE_HAS_XWAYLAND
++#include <wlr/xwayland.h>
++#endif
++
++#include "leafdeck.h"
++#include "output.h"
++#include "seat.h"
++#include "server.h"
++#include "view.h"
++#include "xdg_shell.h"
++#if CAGE_HAS_XWAYLAND
++#include "xwayland.h"
++#endif
++
++struct cg_leafdeck {
++	struct cg_server *server;
++	char path[256];
++	int listen_fd;
++	struct wl_event_source *listen_src;
++	int client_fd;
++	struct wl_event_source *client_src;
++	char in[65536];
++	size_t inlen;
++	pid_t shell_pid; // 0: no Leafdeck connected, cage behaves as it always has
++	struct cg_view *main;
++	struct wl_listener main_commit;
++	struct wl_event_source *main_frame; // frame callbacks for Leafdeck even when programs cover it
++	struct wlr_scene_tree *shell_top; // Leafdeck's other windows, above the native ones
++	struct wl_list natives;		  // cg_native::link
++	uint32_t next_id;
++	uint32_t last_focus; // the focus Leafdeck was last told about
++	struct cg_native *grab; // moving or resizing with the pointer (a program's own title bar)
++	int cover_marker;    // the covers' node data points here
++	struct {
++		char title[96];
++		char output[32];
++	} pending[8]; // `screen` for windows that haven't opened yet
++	struct cg_view *held; // a screen's window a button was pressed on: it has the pointer until the buttons are up
++	struct {
++		bool set; // Leafdeck sent `pointer` (until then libinput's defaults: adaptive, speed 0)
++		bool flat;
++		double speed; // -1..1
++	} pointer;
++};
++
++static struct cg_leafdeck *ld_of(struct cg_server *server)
++{
++	return server->leafdeck;
++}
++
++/* ---------------- telling Leafdeck ---------------- */
++
++static void send_line(struct cg_leafdeck *ld, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
++static void
++send_line(struct cg_leafdeck *ld, const char *fmt, ...)
++{
++	if (ld->client_fd < 0) {
++		return;
++	}
++	char buf[2048];
++	va_list ap;
++	va_start(ap, fmt);
++	int n = vsnprintf(buf, sizeof(buf) - 1, fmt, ap);
++	va_end(ap);
++	if (n < 0) {
++		return;
++	}
++	if (n > (int) sizeof(buf) - 2) {
++		n = sizeof(buf) - 2;
++	}
++	buf[n++] = '\n';
++	size_t off = 0;
++	while (off < (size_t) n) {
++		ssize_t w = send(ld->client_fd, buf + off, n - off, MSG_NOSIGNAL);
++		if (w < 0) {
++			if (errno == EINTR) {
++				continue;
++			}
++			return; // Leafdeck isn't reading (or is gone): it asks for the list again when it's back
++		}
++		off += w;
++	}
++}
++
++/* ---------------- the mouse (Settings → Mouse) ---------------- */
++
++/* A mouse: a libinput pointer with acceleration that isn't a touchpad (those keep libinput's touchpad defaults). */
++static struct libinput_device *
++mouse_of(struct wlr_pointer *pointer)
++{
++	if (!wlr_input_device_is_libinput(&pointer->base)) {
++		return NULL;
++	}
++	struct libinput_device *dev = wlr_libinput_get_device_handle(&pointer->base);
++	if (!dev || libinput_device_config_tap_get_finger_count(dev) > 0 || !libinput_device_config_accel_is_available(dev)) {
++		return NULL;
++	}
++	return dev;
++}
++
++/* Puts the settings on every mouse there is (a new one too) and tells Leafdeck how many. */
++static void
++apply_pointer(struct cg_leafdeck *ld)
++{
++	int mice = 0;
++	struct cg_pointer *p;
++	wl_list_for_each (p, &ld->server->seat->pointers, link) {
++		struct libinput_device *dev = mouse_of(p->pointer);
++		if (!dev) {
++			continue;
++		}
++		mice++;
++		if (!ld->pointer.set) {
++			continue;
++		}
++		enum libinput_config_accel_profile want =
++			ld->pointer.flat ? LIBINPUT_CONFIG_ACCEL_PROFILE_FLAT : LIBINPUT_CONFIG_ACCEL_PROFILE_ADAPTIVE;
++		if (libinput_device_config_accel_get_profiles(dev) & want) {
++			libinput_device_config_accel_set_profile(dev, want);
++		}
++		libinput_device_config_accel_set_speed(dev, ld->pointer.speed);
++	}
++	send_line(ld, "pointer\t%d", mice);
++}
++
++void
++leafdeck_pointers_changed(struct cg_server *server)
++{
++	struct cg_leafdeck *ld = ld_of(server);
++	if (ld) {
++		apply_pointer(ld);
++	}
++}
++
++/* Titles and app ids go in a tab-separated line: no tabs or line breaks in them. */
++static const char *
++clean(const char *s, char *out, size_t size)
++{
++	size_t i = 0;
++	for (; s && *s && i + 1 < size; s++) {
++		out[i++] = (*s == '\t' || *s == '\n' || *s == '\r') ? ' ' : *s;
++	}
++	out[i] = 0;
++	return out;
++}
++
++static const char *
++view_app_id(struct cg_view *view)
++{
++#if CAGE_HAS_XWAYLAND
++	if (view->type == CAGE_XWAYLAND_VIEW) {
++		return xwayland_view_from_view(view)->xwayland_surface->class;
++	}
++#endif
++	return ((struct cg_xdg_shell_view *) view)->xdg_toplevel->app_id;
++}
++
++static const char *
++view_title(struct cg_view *view)
++{
++	return view->impl->get_title(view);
++}
++
++static pid_t
++view_pid(struct cg_view *view, struct wlr_surface *surface)
++{
++#if CAGE_HAS_XWAYLAND
++	if (view->type == CAGE_XWAYLAND_VIEW) {
++		return xwayland_view_from_view(view)->xwayland_surface->pid;
++	}
++#endif
++	pid_t pid = 0;
++	if (surface && surface->resource) {
++		wl_client_get_credentials(wl_resource_get_client(surface->resource), &pid, NULL, NULL);
++	}
++	return pid;
++}
++
++/* The window's own size: its geometry, without client-side shadows. */
++static struct wlr_box
++view_geometry(struct cg_view *view)
++{
++	struct wlr_box box = {0};
++#if CAGE_HAS_XWAYLAND
++	if (view->type == CAGE_XWAYLAND_VIEW) {
++		struct wlr_xwayland_surface *xs = xwayland_view_from_view(view)->xwayland_surface;
++		if (xs->surface) {
++			box.width = xs->surface->current.width;
++			box.height = xs->surface->current.height;
++		}
++		return box;
++	}
++#endif
++	struct wlr_xdg_surface *xdg = ((struct cg_xdg_shell_view *) view)->xdg_toplevel->base;
++	box = xdg->geometry;
++	if (box.width == 0 || box.height == 0) {
++		box.x = box.y = 0;
++		box.width = xdg->surface->current.width;
++		box.height = xdg->surface->current.height;
++	}
++	return box;
++}
++
++static uint32_t
++parent_id(struct cg_view *view)
++{
++	struct cg_leafdeck *ld = ld_of(view->server);
++	struct cg_native *n;
++	wl_list_for_each (n, &ld->natives, link) {
++		if (n->view != view && view_is_transient_for(view, n->view)) {
++			return n->id;
++		}
++	}
++	return 0;
++}
++
++static void
++announce(struct cg_leafdeck *ld, struct cg_native *n)
++{
++	char app[256], title[512];
++	struct wlr_box g = view_geometry(n->view);
++	int min_w = 0, min_h = 0;
++	if (n->view->type == CAGE_XDG_SHELL_VIEW) {
++		struct wlr_xdg_toplevel *t = ((struct cg_xdg_shell_view *) n->view)->xdg_toplevel;
++		min_w = t->current.min_width;
++		min_h = t->current.min_height;
++	}
++	n->told_w = g.width;
++	n->told_h = g.height;
++	// First whether it draws its own title bar, so Leafdeck makes the right frame for it.
++	send_line(ld, "deco\t%u\t%s", n->id, n->ssd ? "ssd" : "csd");
++	send_line(ld, "new\t%u\t%u\t%d\t%d\t%d\t%d\t%d\t%s\t%s", n->id, parent_id(n->view),
++		  (int) view_pid(n->view, n->view->wlr_surface), g.width, g.height, min_w, min_h,
++		  clean(view_app_id(n->view), app, sizeof(app)), clean(view_title(n->view), title, sizeof(title)));
++}
++
++/* ---------------- covers ---------------- */
++
++struct cover_ctx {
++	struct cg_native *n;
++	struct wlr_box rect;
++};
++
++static void
++cover_from_buffer(struct wlr_scene_buffer *sb, int bx, int by, void *data)
++{
++	struct cover_ctx *c = data;
++	if (!sb->buffer || sb->transform != WL_OUTPUT_TRANSFORM_NORMAL) {
++		return;
++	}
++	int dw = sb->dst_width ? sb->dst_width : sb->buffer->width;
++	int dh = sb->dst_height ? sb->dst_height : sb->buffer->height;
++	struct wlr_box dest = {bx, by, dw, dh}, part;
++	if (dw <= 0 || dh <= 0 || !wlr_box_intersection(&part, &dest, &c->rect)) {
++		return;
++	}
++	struct wlr_fbox src = sb->src_box;
++	if (wlr_fbox_empty(&src)) {
++		src = (struct wlr_fbox){0, 0, sb->buffer->width, sb->buffer->height};
++	}
++	double kx = src.width / dw, ky = src.height / dh;
++	struct wlr_scene_buffer *node = wlr_scene_buffer_create(c->n->covers, sb->buffer);
++	if (!node) {
++		return;
++	}
++	struct wlr_fbox from = {
++		.x = src.x + (part.x - bx) * kx,
++		.y = src.y + (part.y - by) * ky,
++		.width = part.width * kx,
++		.height = part.height * ky,
++	};
++	wlr_scene_buffer_set_source_box(node, &from);
++	wlr_scene_buffer_set_dest_size(node, part.width, part.height);
++	wlr_scene_node_set_position(&node->node, part.x, part.y);
++}
++
++/* Draws Leafdeck's current pixels over the native window wherever Leafdeck's UI is in front of it. */
++static void
++sync_covers(struct cg_leafdeck *ld, struct cg_native *n)
++{
++	struct wlr_scene_node *child, *tmp;
++	wl_list_for_each_safe (child, tmp, &n->covers->children, link) {
++		wlr_scene_node_destroy(child);
++	}
++	if (!ld->main || !ld->main->scene_tree || !n->placed) {
++		return;
++	}
++	for (int i = 0; i < n->ncover; i++) {
++		struct cover_ctx c = {n, n->cover[i]};
++		wlr_scene_node_for_each_buffer(&ld->main->scene_tree->node, cover_from_buffer, &c);
++	}
++}
++
++/* The scene only answers a surface's frame callbacks while it's visible. A program in full screen covers all of Leafdeck,
++ * whose page would then stop drawing, and so stop telling cage where the program goes (it never got out of full screen
++ * again). So Leafdeck's main window gets its frame callbacks anyway, about 60 times a second while it draws. */
++static int
++main_frame_done(void *data)
++{
++	struct cg_leafdeck *ld = data;
++	struct timespec now;
++	clock_gettime(CLOCK_MONOTONIC, &now);
++	if (ld->main && ld->main->wlr_surface) {
++		wlr_surface_send_frame_done(ld->main->wlr_surface, &now);
++	}
++	// And each screen's own Leafdeck window.
++	struct cg_view *v;
++	wl_list_for_each (v, &ld->server->views, link) {
++		if (v != ld->main && v->ld_screen[0] && v->wlr_surface) {
++			wlr_surface_send_frame_done(v->wlr_surface, &now);
++		}
++	}
++	return 0;
++}
++
++static void
++frame_soon(struct cg_leafdeck *ld)
++{
++	if (!ld->main_frame) {
++		ld->main_frame = wl_event_loop_add_timer(wl_display_get_event_loop(ld->server->wl_display), main_frame_done, ld);
++	}
++	if (ld->main_frame) {
++		wl_event_source_timer_update(ld->main_frame, 16);
++	}
++}
++
++static void
++handle_main_commit(struct wl_listener *listener, void *data)
++{
++	struct cg_leafdeck *ld = wl_container_of(listener, ld, main_commit);
++	frame_soon(ld);
++	struct cg_native *n;
++	wl_list_for_each (n, &ld->natives, link) {
++		if (n->ncover) {
++			sync_covers(ld, n);
++		}
++	}
++}
++
++static void
++set_main(struct cg_leafdeck *ld, struct cg_view *view)
++{
++	if (ld->main) {
++		wl_list_remove(&ld->main_commit.link);
++	}
++	ld->main = view;
++	if (!view) {
++		return;
++	}
++	ld->main_commit.notify = handle_main_commit;
++	wl_signal_add(&view->wlr_surface->events.commit, &ld->main_commit);
++	// Leafdeck's other windows (a lock screen, a picker) go above the native ones.
++	struct cg_view *v;
++	wl_list_for_each (v, &ld->server->views, link) {
++		if (v != view && !v->native && !v->ld_screen[0] && v->scene_tree &&
++		    v->scene_tree->node.parent == ld->server->shell_layer) {
++			wlr_scene_node_reparent(&v->scene_tree->node, ld->shell_top);
++		}
++	}
++}
++
++/* ---------------- screens ---------------- */
++
++/* Leafdeck can draw each screen as a window of its own (one surface per screen: each at its screen's scale, and what
++ * changes on one screen doesn't make the others redraw). Such a window fills its screen and sits at the bottom, like
++ * the main window, which can be one of them. */
++
++static struct cg_output *
++output_named(struct cg_server *server, const char *name)
++{
++	struct cg_output *o;
++	wl_list_for_each (o, &server->outputs, link) {
++		if (!strcmp(o->wlr_output->name, name)) {
++			return o;
++		}
++	}
++	return NULL;
++}
++
++static void
++handle_screen_commit(struct wl_listener *listener, void *data);
++
++static void
++screen_listen(struct cg_view *view, struct wlr_surface *surface)
++{
++	if (view->ld_listening || !surface) {
++		return;
++	}
++	view->ld_commit.notify = handle_screen_commit;
++	wl_signal_add(&surface->events.commit, &view->ld_commit);
++	view->ld_listening = true;
++}
++
++/* A window `screen` named before it opened: it gets its screen now (its first configure is that screen's size). */
++static void
++adopt_pending(struct cg_leafdeck *ld, struct cg_view *view)
++{
++	const char *t = view_title(view);
++	if (view->ld_screen[0] || view->native || !t) {
++		return;
++	}
++	for (size_t i = 0; i < sizeof(ld->pending) / sizeof(*ld->pending); i++) {
++		if (ld->pending[i].title[0] && !strcmp(ld->pending[i].title, t)) {
++			snprintf(view->ld_screen, sizeof(view->ld_screen), "%s", ld->pending[i].output);
++			ld->pending[i].title[0] = 0;
++			return;
++		}
++	}
++}
++
++bool
++leafdeck_screen_box(struct cg_view *view, struct wlr_box *box)
++{
++	struct cg_leafdeck *ld = ld_of(view->server);
++	if (ld && ld->shell_pid > 0) {
++		adopt_pending(ld, view);
++	}
++	if (!view->ld_screen[0]) {
++		return false;
++	}
++	struct cg_output *o = output_named(view->server, view->ld_screen);
++	if (!o) {
++		return false;
++	}
++	wlr_output_layout_get_box(view->server->output_layout, o->wlr_output, box);
++	return !wlr_box_empty(box);
++}
++
++static void
++handle_screen_commit(struct wl_listener *listener, void *data)
++{
++	struct cg_view *view = wl_container_of(listener, view, ld_commit);
++	frame_soon(ld_of(view->server));
++}
++
++static void
++unpin(struct cg_view *view)
++{
++	view->ld_screen[0] = 0;
++	if (view->ld_listening) {
++		wl_list_remove(&view->ld_commit.link);
++		view->ld_listening = false;
++	}
++}
++
++static void
++pin(struct cg_leafdeck *ld, struct cg_view *view, const char *output)
++{
++	screen_listen(view, view->wlr_surface);
++	snprintf(view->ld_screen, sizeof(view->ld_screen), "%s", output);
++	if (view->scene_tree) {
++		wlr_scene_node_reparent(&view->scene_tree->node, ld->server->shell_layer);
++	}
++	view_position(view);
++}
++
++bool
++leafdeck_pointer_button(struct cg_server *server, bool pressed)
++{
++	struct cg_leafdeck *ld = ld_of(server);
++	if (!ld) {
++		return false;
++	}
++	struct wlr_seat *seat = server->seat->seat;
++	if (pressed) {
++		struct wlr_surface *focused = seat->pointer_state.focused_surface;
++		if (ld->held || !focused || ld->shell_pid <= 0) {
++			return false;
++		}
++		struct cg_view *v;
++		wl_list_for_each (v, &server->views, link) {
++			if (v->ld_screen[0] && v->wlr_surface == focused) {
++				ld->held = v;
++				break;
++			}
++		}
++		return false;
++	}
++	if (ld->held && seat->pointer_state.button_count == 0) {
++		ld->held = NULL;
++		return true;
++	}
++	return false;
++}
++
++bool
++leafdeck_held_motion(struct cg_server *server, uint32_t time_msec, double lx, double ly)
++{
++	struct cg_leafdeck *ld = ld_of(server);
++	struct cg_view *v = ld ? ld->held : NULL;
++	if (!v || !v->wlr_surface) {
++		return false;
++	}
++	struct wlr_seat *seat = server->seat->seat;
++	double sx = lx - v->lx, sy = ly - v->ly;
++	if (seat->pointer_state.focused_surface != v->wlr_surface) {
++		wlr_seat_pointer_notify_enter(seat, v->wlr_surface, sx, sy);
++	}
++	wlr_seat_pointer_notify_motion(seat, time_msec, sx, sy);
++	return true;
++}
++
++/* ---------------- placing ---------------- */
++
++static struct cg_native *
++find(struct cg_leafdeck *ld, uint32_t id)
++{
++	struct cg_native *n;
++	wl_list_for_each (n, &ld->natives, link) {
++		if (n->id == id) {
++			return n;
++		}
++	}
++	return NULL;
++}
++
++static void
++ask_size(struct cg_native *n, int w, int h)
++{
++	struct cg_view *view = n->view;
++#if CAGE_HAS_XWAYLAND
++	if (view->type == CAGE_XWAYLAND_VIEW) {
++		struct wlr_xwayland_surface *xs = xwayland_view_from_view(view)->xwayland_surface;
++		wlr_xwayland_surface_configure(xs, n->rect.x, n->rect.y, w, h);
++		n->asked_w = w;
++		n->asked_h = h;
++		return;
++	}
++#endif
++	if (w == n->asked_w && h == n->asked_h) {
++		return;
++	}
++	n->asked_w = w;
++	n->asked_h = h;
++	wlr_xdg_toplevel_set_size(((struct cg_xdg_shell_view *) view)->xdg_toplevel, w, h);
++}
++
++/* Puts the window's surface so its own area (not its shadows) fills the rectangle, cropped to it. */
++static void
++position(struct cg_native *n)
++{
++	struct cg_view *view = n->view;
++	if (!view->scene_tree) {
++		return;
++	}
++	struct wlr_box g = view_geometry(view);
++	view->lx = n->rect.x - g.x;
++	view->ly = n->rect.y - g.y;
++	wlr_scene_node_set_position(&view->scene_tree->node, view->lx, view->ly);
++	wlr_scene_node_set_position(&n->popups->node, view->lx, view->ly);
++	struct wlr_box clip = {g.x, g.y, n->rect.width, n->rect.height};
++	wlr_scene_subsurface_tree_set_clip(&view->scene_tree->node, &clip);
++}
++
++static void
++place(struct cg_leafdeck *ld, struct cg_native *n, int x, int y, int w, int h)
++{
++	if (w < 1 || h < 1) {
++		return;
++	}
++	int ox = ld->main ? ld->main->lx : 0, oy = ld->main ? ld->main->ly : 0;
++	n->rect = (struct wlr_box){x + ox, y + oy, w, h};
++	n->placed = true;
++	ask_size(n, w, h);
++	position(n);
++	wlr_scene_node_set_enabled(&n->group->node, true);
++	sync_covers(ld, n);
++}
++
++static void
++hide(struct cg_native *n)
++{
++	wlr_scene_node_set_enabled(&n->group->node, false);
++}
++
++/* ---------------- native views ---------------- */
++
++static void
++native_commit(struct wl_listener *listener, void *data)
++{
++	struct cg_native *n = wl_container_of(listener, n, commit);
++	struct cg_leafdeck *ld = ld_of(n->view->server);
++	struct wlr_box g = view_geometry(n->view);
++	if (g.width != n->told_w || g.height != n->told_h) {
++		n->told_w = g.width;
++		n->told_h = g.height;
++		send_line(ld, "size\t%u\t%d\t%d", n->id, g.width, g.height);
++	}
++	if (n->placed) {
++		position(n); // the geometry's offset can change with the size
++	}
++}
++
++static void
++native_title(struct wl_listener *listener, void *data)
++{
++	struct cg_native *n = wl_container_of(listener, n, set_title);
++	char title[512];
++	send_line(ld_of(n->view->server), "title\t%u\t%s", n->id, clean(view_title(n->view), title, sizeof(title)));
++}
++
++static void
++native_app_id(struct wl_listener *listener, void *data)
++{
++	struct cg_native *n = wl_container_of(listener, n, set_app_id);
++	char app[256];
++	send_line(ld_of(n->view->server), "appid\t%u\t%s", n->id, clean(view_app_id(n->view), app, sizeof(app)));
++}
++
++#if CAGE_HAS_XWAYLAND
++/* An X11 program asking for a size or place: before Leafdeck has placed it, it gets what it asked for (Leafdeck
++ * then makes a frame that size); after, it keeps Leafdeck's rectangle. */
++static void
++native_request_configure(struct wl_listener *listener, void *data)
++{
++	struct cg_native *n = wl_container_of(listener, n, request_configure);
++	struct wlr_xwayland_surface_configure_event *ev = data;
++	if (n->placed) {
++		wlr_xwayland_surface_configure(ev->surface, n->rect.x, n->rect.y, n->rect.width, n->rect.height);
++	} else {
++		wlr_xwayland_surface_configure(ev->surface, ev->x, ev->y, ev->width, ev->height);
++	}
++}
++#endif
++
++/* ---------------- a program's own title bar ---------------- */
++
++static void
++main_coords(struct cg_leafdeck *ld, double lx, double ly, int *x, int *y)
++{
++	*x = (int) (lx - (ld->main ? ld->main->lx : 0));
++	*y = (int) (ly - (ld->main ? ld->main->ly : 0));
++}
++
++static void
++start_grab(struct cg_native *n, const char *kind, uint32_t edges)
++{
++	struct cg_server *server = n->view->server;
++	struct cg_leafdeck *ld = ld_of(server);
++	// Only while a button is down (a press on the title bar), and only when Leafdeck can move the frame.
++	if (!ld->main || n->view->native == NULL || server->seat->seat->pointer_state.button_count == 0) {
++		return;
++	}
++	ld->grab = n;
++	wlr_seat_pointer_clear_focus(server->seat->seat);
++	int x, y;
++	main_coords(ld, server->seat->cursor->x, server->seat->cursor->y, &x, &y);
++	send_line(ld, "grab\t%u\t%s\t%u\t%d\t%d", n->id, kind, edges, x, y);
++}
++
++bool
++leafdeck_grab_motion(struct cg_server *server, double lx, double ly)
++{
++	struct cg_leafdeck *ld = ld_of(server);
++	if (!ld || !ld->grab) {
++		return false;
++	}
++	int x, y;
++	main_coords(ld, lx, ly, &x, &y);
++	send_line(ld, "drag\t%u\t%d\t%d", ld->grab->id, x, y);
++	return true;
++}
++
++bool
++leafdeck_grab_button(struct cg_server *server, bool pressed)
++{
++	struct cg_leafdeck *ld = ld_of(server);
++	if (!ld || !ld->grab) {
++		return false;
++	}
++	if (!pressed && server->seat->seat->pointer_state.button_count == 0) {
++		int x, y;
++		main_coords(ld, server->seat->cursor->x, server->seat->cursor->y, &x, &y);
++		send_line(ld, "dragend\t%u\t%d\t%d", ld->grab->id, x, y);
++		ld->grab = NULL;
++	}
++	return true;
++}
++
++static void
++native_request_move(struct wl_listener *listener, void *data)
++{
++	struct cg_native *n = wl_container_of(listener, n, request_move);
++	start_grab(n, "move", 0);
++}
++
++static void
++native_request_resize(struct wl_listener *listener, void *data)
++{
++	struct cg_native *n = wl_container_of(listener, n, request_resize);
++	uint32_t edges = 0;
++#if CAGE_HAS_XWAYLAND
++	if (n->view->type == CAGE_XWAYLAND_VIEW) {
++		edges = ((struct wlr_xwayland_resize_event *) data)->edges;
++	} else
++#endif
++		edges = ((struct wlr_xdg_toplevel_resize_event *) data)->edges;
++	start_grab(n, "resize", edges);
++}
++
++static void
++native_request_maximize(struct wl_listener *listener, void *data)
++{
++	struct cg_native *n = wl_container_of(listener, n, request_maximize);
++	bool on = true;
++#if CAGE_HAS_XWAYLAND
++	if (n->view->type == CAGE_XWAYLAND_VIEW) {
++		struct wlr_xwayland_surface *xs = xwayland_view_from_view(n->view)->xwayland_surface;
++		on = !(xs->maximized_horz && xs->maximized_vert);
++	} else
++#endif
++	{
++		struct wlr_xdg_toplevel *t = ((struct cg_xdg_shell_view *) n->view)->xdg_toplevel;
++		on = t->requested.maximized;
++		if (t->base->initialized) {
++			wlr_xdg_surface_schedule_configure(t->base); // the protocol wants an answer either way
++		}
++	}
++	send_line(ld_of(n->view->server), "state\t%u\t%s", n->id, on ? "maximize" : "unmaximize");
++}
++
++static void
++native_request_minimize(struct wl_listener *listener, void *data)
++{
++	struct cg_native *n = wl_container_of(listener, n, request_minimize);
++#if CAGE_HAS_XWAYLAND
++	if (n->view->type == CAGE_XWAYLAND_VIEW && !((struct wlr_xwayland_minimize_event *) data)->minimize) {
++		return;
++	}
++#endif
++	send_line(ld_of(n->view->server), "state\t%u\tminimize", n->id);
++}
++
++#if CAGE_HAS_XWAYLAND
++/* An X11 program without the window manager's frame (_MOTIF_WM_HINTS: Spotify, Chrome) draws its own title bar. */
++static bool
++x11_ssd(struct wlr_xwayland_surface *xs)
++{
++	return xs->decorations == WLR_XWAYLAND_SURFACE_DECORATIONS_ALL;
++}
++
++static void
++native_set_decorations(struct wl_listener *listener, void *data)
++{
++	struct cg_native *n = wl_container_of(listener, n, set_decorations);
++	bool ssd = x11_ssd(xwayland_view_from_view(n->view)->xwayland_surface);
++	if (ssd != n->ssd) {
++		n->ssd = ssd;
++		send_line(ld_of(n->view->server), "deco\t%u\t%s", n->id, ssd ? "ssd" : "csd");
++	}
++}
++#endif
++
++void
++leafdeck_decoration(struct cg_view *view, bool server_side)
++{
++	view->ssd = server_side;
++	if (view->native && view->native->ssd != server_side) {
++		view->native->ssd = server_side;
++		send_line(ld_of(view->server), "deco\t%u\t%s", view->native->id, server_side ? "ssd" : "csd");
++	}
++}
++
++bool
++leafdeck_pid_is_native(struct cg_server *server, pid_t pid)
++{
++	struct cg_leafdeck *ld = ld_of(server);
++	return ld && ld->shell_pid > 0 && pid > 0 && pid != ld->shell_pid;
++}
++
++bool
++leafdeck_surface_is_native(struct cg_server *server, struct wlr_surface *surface)
++{
++	pid_t pid = 0;
++	if (!surface || !surface->resource) {
++		return false;
++	}
++	wl_client_get_credentials(wl_resource_get_client(surface->resource), &pid, NULL, NULL);
++	return leafdeck_pid_is_native(server, pid);
++}
++
++struct wlr_scene_tree *
++leafdeck_view_parent(struct cg_view *view, struct wlr_surface *surface)
++{
++	struct cg_server *server = view->server;
++	struct cg_leafdeck *ld = ld_of(server);
++	if (!ld || !leafdeck_pid_is_native(server, view_pid(view, surface))) {
++		// Leafdeck's own windows: the main one and each screen's at the bottom, the rest above the native windows.
++		if (ld && ld->shell_pid > 0) {
++			adopt_pending(ld, view);
++		}
++		if (ld && view->ld_screen[0]) {
++			screen_listen(view, surface);
++			return server->shell_layer;
++		}
++		return (ld && ld->main) ? ld->shell_top : server->shell_layer;
++	}
++#if CAGE_HAS_XWAYLAND
++	if (view->type == CAGE_XWAYLAND_VIEW && !xwayland_view_should_manage(view)) {
++		// An X11 menu or tooltip: where the program puts it, above everything native.
++		view->native_overlay = true;
++		return server->native_layer;
++	}
++#endif
++	struct cg_native *n = calloc(1, sizeof(*n));
++	if (!n) {
++		return server->shell_layer;
++	}
++	n->view = view;
++	n->id = ++ld->next_id;
++	n->group = wlr_scene_tree_create(server->native_layer);
++	n->group->node.data = view;
++	n->covers = wlr_scene_tree_create(n->group);
++	n->covers->node.data = &ld->cover_marker;
++	n->popups = wlr_scene_tree_create(n->group);
++	wlr_scene_node_set_enabled(&n->group->node, false); // until Leafdeck places it
++	view->native = n;
++	wl_list_insert(ld->natives.prev, &n->link);
++	return n->group;
++}
++
++void
++leafdeck_view_mapped(struct cg_view *view)
++{
++	struct cg_native *n = view->native;
++	if (view->native_overlay) {
++		wlr_scene_node_raise_to_top(&view->scene_tree->node);
++		return;
++	}
++	if (!n) {
++		return;
++	}
++	// The window goes below its covers and popups.
++	wlr_scene_node_lower_to_bottom(&view->scene_tree->node);
++	n->commit.notify = native_commit;
++	wl_signal_add(&view->wlr_surface->events.commit, &n->commit);
++	wl_list_init(&n->request_configure.link);
++#if CAGE_HAS_XWAYLAND
++	if (view->type == CAGE_XWAYLAND_VIEW) {
++		struct wlr_xwayland_surface *xs = xwayland_view_from_view(view)->xwayland_surface;
++		n->set_title.notify = native_title;
++		wl_signal_add(&xs->events.set_title, &n->set_title);
++		n->set_app_id.notify = native_app_id;
++		wl_signal_add(&xs->events.set_class, &n->set_app_id);
++		n->request_configure.notify = native_request_configure;
++		wl_signal_add(&xs->events.request_configure, &n->request_configure);
++		n->request_move.notify = native_request_move;
++		wl_signal_add(&xs->events.request_move, &n->request_move);
++		n->request_resize.notify = native_request_resize;
++		wl_signal_add(&xs->events.request_resize, &n->request_resize);
++		n->request_maximize.notify = native_request_maximize;
++		wl_signal_add(&xs->events.request_maximize, &n->request_maximize);
++		n->request_minimize.notify = native_request_minimize;
++		wl_signal_add(&xs->events.request_minimize, &n->request_minimize);
++		n->set_decorations.notify = native_set_decorations;
++		wl_signal_add(&xs->events.set_decorations, &n->set_decorations);
++		n->ssd = x11_ssd(xs);
++	} else
++#endif
++	{
++		struct wlr_xdg_toplevel *t = ((struct cg_xdg_shell_view *) view)->xdg_toplevel;
++		n->set_title.notify = native_title;
++		wl_signal_add(&t->events.set_title, &n->set_title);
++		n->set_app_id.notify = native_app_id;
++		wl_signal_add(&t->events.set_app_id, &n->set_app_id);
++		n->request_move.notify = native_request_move;
++		wl_signal_add(&t->events.request_move, &n->request_move);
++		n->request_resize.notify = native_request_resize;
++		wl_signal_add(&t->events.request_resize, &n->request_resize);
++		n->request_maximize.notify = native_request_maximize;
++		wl_signal_add(&t->events.request_maximize, &n->request_maximize);
++		n->request_minimize.notify = native_request_minimize;
++		wl_signal_add(&t->events.request_minimize, &n->request_minimize);
++		wl_list_init(&n->set_decorations.link);
++		n->ssd = view->ssd;
++	}
++	announce(ld_of(view->server), n);
++}
++
++void
++leafdeck_view_unmapped(struct cg_view *view)
++{
++	struct cg_leafdeck *ld = ld_of(view->server);
++	if (!ld) {
++		return;
++	}
++	if (ld->main == view) {
++		set_main(ld, NULL);
++		send_line(ld, "main\tmissing");
++	}
++	unpin(view);
++	if (ld->held == view) {
++		ld->held = NULL;
++	}
++	struct cg_native *n = view->native;
++	if (!n) {
++		return;
++	}
++	send_line(ld, "gone\t%u", n->id);
++	if (ld->last_focus == n->id) {
++		ld->last_focus = 0;
++	}
++	wl_list_remove(&n->commit.link);
++	wl_list_remove(&n->set_title.link);
++	wl_list_remove(&n->set_app_id.link);
++	wl_list_remove(&n->request_configure.link);
++	wl_list_remove(&n->request_move.link);
++	wl_list_remove(&n->request_resize.link);
++	wl_list_remove(&n->request_maximize.link);
++	wl_list_remove(&n->request_minimize.link);
++	wl_list_remove(&n->set_decorations.link);
++	if (ld->grab == n) {
++		ld->grab = NULL;
++	}
++	wl_list_remove(&n->link);
++	wlr_scene_node_destroy(&n->group->node); // with the window's surface tree in it
++	view->scene_tree = NULL;
++	view->native = NULL;
++	free(n);
++}
++
++struct wlr_scene_tree *
++leafdeck_popup_parent(struct cg_view *view)
++{
++	return view->native ? view->native->popups : view->scene_tree;
++}
++
++void
++leafdeck_focus_changed(struct cg_view *view)
++{
++	struct cg_leafdeck *ld = ld_of(view->server);
++	if (!ld || ld->shell_pid <= 0 || view->native_overlay) {
++		return;
++	}
++	uint32_t id = view->native ? view->native->id : 0;
++	if (id != ld->last_focus) {
++		ld->last_focus = id;
++		send_line(ld, "focus\t%u", id);
++	}
++}
++
++void
++leafdeck_fullscreen_requested(struct cg_view *view, bool fullscreen)
++{
++	if (view->native) {
++		send_line(ld_of(view->server), "fullscreen\t%u\t%d", view->native->id, fullscreen ? 1 : 0);
++	}
++}
++
++struct cg_view *
++leafdeck_cover_hit(struct cg_server *server, struct wlr_scene_node *node, double lx, double ly,
++		   struct wlr_surface **surface, double *sx, double *sy)
++{
++	struct cg_leafdeck *ld = ld_of(server);
++	if (!ld) {
++		return NULL;
++	}
++	bool cover = false;
++	for (struct wlr_scene_node *p = node; p; p = p->parent ? &p->parent->node : NULL) {
++		if (p->data == &ld->cover_marker) {
++			cover = true;
++			break;
++		}
++	}
++	if (!cover || !ld->main || !ld->main->scene_tree) {
++		return NULL;
++	}
++	struct wlr_scene_node *hit = wlr_scene_node_at(&ld->main->scene_tree->node, lx, ly, sx, sy);
++	if (!hit || hit->type != WLR_SCENE_NODE_BUFFER) {
++		return NULL;
++	}
++	struct wlr_scene_surface *ss = wlr_scene_surface_try_from_buffer(wlr_scene_buffer_from_node(hit));
++	if (!ss) {
++		return NULL;
++	}
++	*surface = ss->surface;
++	return ld->main;
++}
++
++void
++leafdeck_key(struct cg_server *server, const xkb_keysym_t *syms, int nsyms, uint32_t modifiers, bool pressed)
++{
++	struct cg_leafdeck *ld = ld_of(server);
++	if (!ld || !ld->main || !pressed) {
++		return;
++	}
++	struct cg_view *focus = seat_get_focus(server->seat);
++	if (!focus || !focus->native) {
++		return;
++	}
++	for (int i = 0; i < nsyms; i++) {
++		bool super = syms[i] == XKB_KEY_Super_L || syms[i] == XKB_KEY_Super_R;
++		bool alt_tab = syms[i] == XKB_KEY_Tab && (modifiers & WLR_MODIFIER_ALT);
++		if (super || alt_tab) {
++			seat_set_focus(server->seat, ld->main);
++			return;
++		}
++	}
++}
++
++/* ---------------- the control socket ---------------- */
++
++static void drop_client(struct cg_leafdeck *ld);
++
++static int
++to_int(const char *s, int *out)
++{
++	if (!s) {
++		return 0;
++	}
++	char *end;
++	long v = strtol(s, &end, 10);
++	if (*end || end == s) {
++		return 0;
++	}
++	*out = (int) v;
++	return 1;
++}
++
++static void
++command(struct cg_leafdeck *ld, char *line)
++{
++	char *argv[2 + 4 * LD_MAX_COVERS + 4];
++	int argc = 0;
++	for (char *tok = strtok(line, " \t"); tok && argc < (int) (sizeof(argv) / sizeof(*argv)); tok = strtok(NULL, " \t")) {
++		argv[argc++] = tok;
++	}
++	if (argc == 0) {
++		return;
++	}
++	struct cg_server *server = ld->server;
++	const char *cmd = argv[0];
++	int id = 0;
++	struct cg_native *n = argc > 1 && to_int(argv[1], &id) ? find(ld, (uint32_t) id) : NULL;
++
++	if (!strcmp(cmd, "shell") && argc == 2) {
++		int pid;
++		if (to_int(argv[1], &pid) && pid > 0) {
++			ld->shell_pid = pid;
++			wlr_log(WLR_INFO, "Leafdeck: the shell is process %d", pid);
++		}
++	} else if (!strcmp(cmd, "main") && argc >= 2) {
++		// The rest of the line is the title (it can't hold spaces here: Leafdeck sends a single word).
++		struct cg_view *v, *found = NULL;
++		wl_list_for_each (v, &server->views, link) {
++			const char *t = view_title(v);
++			if (!v->native && t && !strcmp(t, argv[1])) {
++				found = v;
++			}
++		}
++		set_main(ld, found);
++		send_line(ld, "main\t%s", found ? "ok" : "missing");
++	} else if (!strcmp(cmd, "screen") && argc == 3) {
++		struct cg_view *v, *found = NULL;
++		wl_list_for_each (v, &server->views, link) {
++			const char *t = view_title(v);
++			if (!v->native && !v->native_overlay && t && !strcmp(t, argv[1])) {
++				found = v;
++			}
++		}
++		if (found && !strcmp(argv[2], "-")) {
++			unpin(found);
++			view_position(found);
++		} else if (found) {
++			pin(ld, found, argv[2]);
++		} else {
++			// Not open yet: it gets its screen as it opens. The oldest wish makes room.
++			size_t n = sizeof(ld->pending) / sizeof(*ld->pending), slot = n - 1;
++			for (size_t i = 0; i < n; i++) {
++				if (!ld->pending[i].title[0] || !strcmp(ld->pending[i].title, argv[1])) {
++					slot = i;
++					break;
++				}
++			}
++			snprintf(ld->pending[slot].title, sizeof(ld->pending[slot].title), "%s", argv[1]);
++			snprintf(ld->pending[slot].output, sizeof(ld->pending[slot].output), "%s", argv[2]);
++		}
++		send_line(ld, "screen\t%s\t%s", argv[2], found ? "ok" : "pending");
++	} else if (!strcmp(cmd, "mainscreen") && argc == 2) {
++		if (ld->main && !strcmp(argv[1], "-")) {
++			unpin(ld->main);
++			view_position(ld->main);
++		} else if (ld->main) {
++			pin(ld, ld->main, argv[1]);
++		}
++		send_line(ld, "screen\t%s\t%s", argv[1], ld->main ? "ok" : "missing"); // also tells Leafdeck this cage pins
++	} else if (!strcmp(cmd, "screenfocus") && argc == 2) {
++		struct cg_view *v;
++		wl_list_for_each (v, &server->views, link) {
++			if (!strcmp(v->ld_screen, argv[1])) {
++				seat_set_focus(server->seat, v);
++				break;
++			}
++		}
++	} else if (!strcmp(cmd, "list")) {
++		struct cg_native *each;
++		wl_list_for_each (each, &ld->natives, link) {
++			announce(ld, each);
++		}
++		struct cg_view *f = seat_get_focus(server->seat);
++		ld->last_focus = f && f->native ? f->native->id : 0;
++		send_line(ld, "focus\t%u", ld->last_focus);
++	} else if (!strcmp(cmd, "place") && n && argc == 6) {
++		int x, y, w, h;
++		if (to_int(argv[2], &x) && to_int(argv[3], &y) && to_int(argv[4], &w) && to_int(argv[5], &h)) {
++			place(ld, n, x, y, w, h);
++		}
++	} else if (!strcmp(cmd, "hide") && n) {
++		hide(n);
++	} else if (!strcmp(cmd, "cover") && n) {
++		int ox = ld->main ? ld->main->lx : 0, oy = ld->main ? ld->main->ly : 0;
++		n->ncover = 0;
++		for (int i = 2; i + 3 < argc && n->ncover < LD_MAX_COVERS; i += 4) {
++			struct wlr_box b;
++			if (to_int(argv[i], &b.x) && to_int(argv[i + 1], &b.y) && to_int(argv[i + 2], &b.width) &&
++			    to_int(argv[i + 3], &b.height) && b.width > 0 && b.height > 0) {
++				b.x += ox;
++				b.y += oy;
++				n->cover[n->ncover++] = b;
++			}
++		}
++		sync_covers(ld, n);
++	} else if (!strcmp(cmd, "order")) {
++		for (int i = 1; i < argc; i++) {
++			int oid;
++			struct cg_native *o = to_int(argv[i], &oid) ? find(ld, (uint32_t) oid) : NULL;
++			if (o) {
++				wlr_scene_node_raise_to_top(&o->group->node);
++			}
++		}
++		// X11 menus stay above every window.
++		struct cg_view *v;
++		wl_list_for_each (v, &server->views, link) {
++			if (v->native_overlay && v->scene_tree) {
++				wlr_scene_node_raise_to_top(&v->scene_tree->node);
++			}
++		}
++	} else if (!strcmp(cmd, "focus") && argc == 2) {
++		if (id == 0 && ld->main) {
++			seat_set_focus(server->seat, ld->main);
++		} else if (n) {
++			seat_set_focus(server->seat, n->view);
++		}
++	} else if (!strcmp(cmd, "close") && n) {
++		n->view->impl->close(n->view);
++	} else if (!strcmp(cmd, "maximized") && n && argc == 3) {
++		bool on = !strcmp(argv[2], "1");
++#if CAGE_HAS_XWAYLAND
++		if (n->view->type == CAGE_XWAYLAND_VIEW) {
++			wlr_xwayland_surface_set_maximized(xwayland_view_from_view(n->view)->xwayland_surface, on, on);
++		} else
++#endif
++			wlr_xdg_toplevel_set_maximized(((struct cg_xdg_shell_view *) n->view)->xdg_toplevel, on);
++	} else if (!strcmp(cmd, "fullscreen") && n && argc == 3) {
++		bool on = !strcmp(argv[2], "1");
++		n->fullscreen = on;
++#if CAGE_HAS_XWAYLAND
++		if (n->view->type == CAGE_XWAYLAND_VIEW) {
++			wlr_xwayland_surface_set_fullscreen(xwayland_view_from_view(n->view)->xwayland_surface, on);
++		} else
++#endif
++			wlr_xdg_toplevel_set_fullscreen(((struct cg_xdg_shell_view *) n->view)->xdg_toplevel, on);
++	} else if (!strcmp(cmd, "pointer") && argc == 3) {
++		int speed;
++		if ((!strcmp(argv[1], "flat") || !strcmp(argv[1], "adaptive")) && to_int(argv[2], &speed)) {
++			ld->pointer.set = true;
++			ld->pointer.flat = !strcmp(argv[1], "flat");
++			ld->pointer.speed = (speed < -100 ? -100 : speed > 100 ? 100 : speed) / 100.0;
++			apply_pointer(ld);
++		}
++	} else {
++		wlr_log(WLR_DEBUG, "Leafdeck: unknown command %s", cmd);
++	}
++}
++
++static int
++handle_client(int fd, uint32_t mask, void *data)
++{
++	struct cg_leafdeck *ld = data;
++	if (mask & (WL_EVENT_HANGUP | WL_EVENT_ERROR)) {
++		drop_client(ld);
++		return 0;
++	}
++	ssize_t r = recv(fd, ld->in + ld->inlen, sizeof(ld->in) - 1 - ld->inlen, 0);
++	if (r <= 0) {
++		if (r < 0 && (errno == EAGAIN || errno == EINTR)) {
++			return 0;
++		}
++		drop_client(ld);
++		return 0;
++	}
++	ld->inlen += r;
++	ld->in[ld->inlen] = 0;
++	char *start = ld->in, *nl;
++	while ((nl = memchr(start, '\n', ld->in + ld->inlen - start))) {
++		*nl = 0;
++		command(ld, start);
++		if (ld->client_fd < 0) {
++			return 0;
++		}
++		start = nl + 1;
++	}
++	ld->inlen -= start - ld->in;
++	memmove(ld->in, start, ld->inlen);
++	if (ld->inlen >= sizeof(ld->in) - 1) {
++		ld->inlen = 0; // a line that long is nonsense
++	}
++	return 0;
++}
++
++/* Leafdeck went away (it's restarting): its native windows wait, hidden, until it's back and places them again. */
++static void
++drop_client(struct cg_leafdeck *ld)
++{
++	if (ld->client_src) {
++		wl_event_source_remove(ld->client_src);
++		ld->client_src = NULL;
++	}
++	if (ld->client_fd >= 0) {
++		close(ld->client_fd);
++		ld->client_fd = -1;
++	}
++	ld->inlen = 0;
++	ld->shell_pid = 0;
++	set_main(ld, NULL);
++	memset(ld->pending, 0, sizeof(ld->pending));
++	ld->held = NULL;
++	struct cg_view *v;
++	wl_list_for_each (v, &ld->server->views, link) {
++		if (v->ld_screen[0]) {
++			unpin(v);
++			view_position(v);
++		}
++	}
++	struct cg_native *n;
++	wl_list_for_each (n, &ld->natives, link) {
++		n->placed = false;
++		n->ncover = 0;
++		hide(n);
++		sync_covers(ld, n);
++	}
++	// Until Leafdeck is back, its windows are ordinary ones again.
++	struct wlr_scene_node *child, *tmp;
++	wl_list_for_each_safe (child, tmp, &ld->shell_top->children, link) {
++		wlr_scene_node_reparent(child, ld->server->shell_layer);
++	}
++}
++
++static int
++handle_listen(int fd, uint32_t mask, void *data)
++{
++	struct cg_leafdeck *ld = data;
++	int c = accept4(fd, NULL, NULL, SOCK_CLOEXEC | SOCK_NONBLOCK);
++	if (c < 0) {
++		return 0;
++	}
++	// Only this account (the socket's folder is private anyway).
++	struct ucred cred;
++	socklen_t len = sizeof(cred);
++	if (getsockopt(c, SOL_SOCKET, SO_PEERCRED, &cred, &len) < 0 || cred.uid != getuid()) {
++		close(c);
++		return 0;
++	}
++	drop_client(ld); // one Leafdeck at a time: the newest
++	ld->client_fd = c;
++	ld->client_src = wl_event_loop_add_fd(wl_display_get_event_loop(ld->server->wl_display), c, WL_EVENT_READABLE,
++					      handle_client, ld);
++	return 0;
++}
++
++void
++leafdeck_init(struct cg_server *server, const char *wayland_socket)
++{
++	struct cg_leafdeck *ld = calloc(1, sizeof(*ld));
++	if (!ld) {
++		return;
++	}
++	ld->server = server;
++	ld->listen_fd = ld->client_fd = -1;
++	wl_list_init(&ld->natives);
++	ld->shell_top = wlr_scene_tree_create(&server->scene->tree);
++	server->leafdeck = ld;
++
++	const char *dir = getenv("XDG_RUNTIME_DIR");
++	if (!dir || !wayland_socket) {
++		return;
++	}
++	snprintf(ld->path, sizeof(ld->path), "%s/%s.leafdeck", dir, wayland_socket);
++	int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
++	struct sockaddr_un addr = {.sun_family = AF_UNIX};
++	size_t len = strlen(ld->path);
++	if (len >= sizeof(addr.sun_path)) {
++		wlr_log(WLR_ERROR, "Leafdeck: the control socket's path is too long: %s", ld->path);
++		if (fd >= 0) {
++			close(fd);
++		}
++		return;
++	}
++	memcpy(addr.sun_path, ld->path, len + 1);
++	unlink(ld->path);
++	if (fd < 0 || bind(fd, (struct sockaddr *) &addr, sizeof(addr)) < 0 || listen(fd, 2) < 0) {
++		wlr_log_errno(WLR_ERROR, "Leafdeck: no control socket at %s", ld->path);
++		if (fd >= 0) {
++			close(fd);
++		}
++		return;
++	}
++	chmod(ld->path, 0600);
++	ld->listen_fd = fd;
++	ld->listen_src = wl_event_loop_add_fd(wl_display_get_event_loop(server->wl_display), fd, WL_EVENT_READABLE,
++					      handle_listen, ld);
++	setenv("LEAFDECK_COMPOSITOR", ld->path, true);
++	wlr_log(WLR_INFO, "Leafdeck: control socket %s", ld->path);
++}
++
++void
++leafdeck_finish(struct cg_server *server)
++{
++	struct cg_leafdeck *ld = ld_of(server);
++	if (!ld) {
++		return;
++	}
++	// The sockets go; the state stays for the windows that unmap while the display shuts down.
++	if (ld->client_src) {
++		wl_event_source_remove(ld->client_src);
++		ld->client_src = NULL;
++	}
++	if (ld->client_fd >= 0) {
++		close(ld->client_fd);
++		ld->client_fd = -1;
++	}
++	if (ld->listen_src) {
++		wl_event_source_remove(ld->listen_src);
++		ld->listen_src = NULL;
++	}
++	if (ld->listen_fd >= 0) {
++		close(ld->listen_fd);
++		ld->listen_fd = -1;
++		unlink(ld->path);
++	}
++}
+diff --git a/leafdeck.h b/leafdeck.h
+new file mode 100644
+index 0000000..6588171
+--- /dev/null
++++ b/leafdeck.h
+@@ -0,0 +1,101 @@
++#ifndef CG_LEAFDECK_H
++#define CG_LEAFDECK_H
++
++/*
++ * Leafdeck OS: the real windows of programs, inside Leafdeck's own window frames.
++ *
++ * Leafdeck (an Electron app, "the shell") is cage's full-screen client, and it draws every window frame itself. Once
++ * it connects to the control socket (its path is in LEAFDECK_COMPOSITOR) and says which process it is, every toplevel
++ * from any other process is a "native" window: cage doesn't make it full screen, but tells Leafdeck about it and
++ * shows it where Leafdeck says, cropped to the frame's content. The native windows are drawn above Leafdeck's main
++ * window; wherever Leafdeck's UI should be in front of one (another window over it, a menu), Leafdeck lists that
++ * area as a "cover" and cage draws Leafdeck's own pixels there again, above the native window. Leafdeck's other
++ * windows (the lock screen, a file picker) are drawn above everything.
++ */
++
++#include <stdbool.h>
++#include <sys/types.h>
++#include <wayland-server-core.h>
++#include <wlr/util/box.h>
++#include <xkbcommon/xkbcommon.h>
++
++struct cg_server;
++struct cg_view;
++struct wlr_surface;
++struct wlr_scene_node;
++struct wlr_scene_tree;
++
++#define LD_MAX_COVERS 48
++
++struct cg_native {
++	struct cg_view *view;
++	struct wl_list link; // cg_leafdeck::natives
++	uint32_t id;
++	struct wlr_scene_tree *group;  // the window, its covers and its popups, in this order
++	struct wlr_scene_tree *covers; // Leafdeck's pixels over the window where its UI is in front
++	struct wlr_scene_tree *popups; // the window's menus, above its covers
++	struct wlr_box rect;	       // where Leafdeck shows it (layout coordinates)
++	bool placed;
++	bool fullscreen;
++	int asked_w, asked_h; // the size last asked of the program
++	int told_w, told_h;   // the size last told to Leafdeck
++	struct wlr_box cover[LD_MAX_COVERS];
++	int ncover;
++	struct wl_listener commit;
++	struct wl_listener set_title;
++	struct wl_listener set_app_id;
++	struct wl_listener request_configure; // X11
++	struct wl_listener request_move;
++	struct wl_listener request_resize;
++	struct wl_listener request_maximize;
++	struct wl_listener request_minimize;
++	struct wl_listener set_decorations; // X11
++	bool ssd; // Leafdeck draws its title bar (the program asked for server-side decorations)
++};
++
++void leafdeck_init(struct cg_server *server, const char *wayland_socket);
++void leafdeck_finish(struct cg_server *server);
++
++/* Is this surface a native window's (a client other than Leafdeck, while Leafdeck is connected)? */
++bool leafdeck_surface_is_native(struct cg_server *server, struct wlr_surface *surface);
++bool leafdeck_pid_is_native(struct cg_server *server, pid_t pid);
++
++/* Buttons on a screen's Leafdeck window hold the pointer there until they're all let go. leafdeck_pointer_button is
++ * called after the seat has the button; true when the hold just ended. leafdeck_held_motion sends the motion to the held
++ * window (true) or leaves it to the usual hit test (false). */
++bool leafdeck_pointer_button(struct cg_server *server, bool pressed);
++bool leafdeck_held_motion(struct cg_server *server, uint32_t time_msec, double lx, double ly);
++
++/* A Leafdeck window that fills one screen (the `screen` command): that screen's box in layout coordinates. False for
++ * any other window, or when its screen isn't on. */
++bool leafdeck_screen_box(struct cg_view *view, struct wlr_box *box);
++
++/* Where a mapping view's scene tree goes (and makes it native when it should be). */
++struct wlr_scene_tree *leafdeck_view_parent(struct cg_view *view, struct wlr_surface *surface);
++void leafdeck_view_mapped(struct cg_view *view);
++void leafdeck_view_unmapped(struct cg_view *view);
++void leafdeck_focus_changed(struct cg_view *view);
++void leafdeck_fullscreen_requested(struct cg_view *view, bool fullscreen);
++
++/* A cover was hit: the input goes to Leafdeck's main window. NULL when `node` isn't a cover's. */
++struct cg_view *leafdeck_cover_hit(struct cg_server *server, struct wlr_scene_node *node, double lx, double ly,
++				   struct wlr_surface **surface, double *sx, double *sy);
++
++/* Leafdeck's keys (Super, Alt+Tab) bring the keyboard back to Leafdeck from a native window. */
++void leafdeck_key(struct cg_server *server, const xkb_keysym_t *syms, int nsyms, uint32_t modifiers, bool pressed);
++
++/* An xdg decoration was negotiated: server-side means Leafdeck's title bar, client-side the program's own. */
++void leafdeck_decoration(struct cg_view *view, bool server_side);
++
++/* A program moving or resizing its window from its own title bar: the pointer goes to Leafdeck's frame until the
++ * button is let go. True when the event was taken. */
++bool leafdeck_grab_motion(struct cg_server *server, double lx, double ly);
++bool leafdeck_grab_button(struct cg_server *server, bool pressed);
++
++/* A pointer came or went: the mouse settings Leafdeck sent (`pointer`) go on every mouse, and Leafdeck hears how many. */
++void leafdeck_pointers_changed(struct cg_server *server);
++
++/* The scene tree a native view's popups go in. */
++struct wlr_scene_tree *leafdeck_popup_parent(struct cg_view *view);
++
++#endif
+diff --git a/meson.build b/meson.build
+index 14fa60a..64033ec 100644
+--- a/meson.build
++++ b/meson.build
+@@ -94,6 +94,7 @@ endif
+ cage_sources = [
+   'cage.c',
+   'idle_inhibit_v1.c',
++  'leafdeck.c',
+   'output.c',
+   'seat.c',
+   'view.c',
+diff --git a/seat.c b/seat.c
+index bbfd3e9..a274edc 100644
+--- a/seat.c
++++ b/seat.c
+@@ -8,6 +8,7 @@
+ 
+ #define _POSIX_C_SOURCE 200809L
+ 
++#include "leafdeck.h"
+ #include "config.h"
+ 
+ #include <assert.h>
+@@ -47,6 +48,8 @@
+ #endif
+ 
+ static void drag_icon_update_position(struct cg_drag_icon *drag_icon);
++static void process_cursor_motion(struct cg_seat *seat, uint32_t time_msec, double dx, double dy, double dx_unaccel,
++				  double dy_unaccel);
+ 
+ /* XDG toplevels may have nested surfaces, such as popup windows for context
+  * menus or tooltips. This function tests if any of those are underneath the
+@@ -67,6 +70,12 @@ desktop_view_at(struct cg_server *server, double lx, double ly, struct wlr_surfa
+ 		return NULL;
+ 	}
+ 
++	/* Leafdeck OS: Leafdeck's UI in front of a program's window is its main window's. */
++	struct cg_view *cover_view = leafdeck_cover_hit(server, node, lx, ly, surface, sx, sy);
++	if (cover_view) {
++		return cover_view;
++	}
++
+ 	struct wlr_scene_buffer *scene_buffer = wlr_scene_buffer_from_node(node);
+ 	struct wlr_scene_surface *scene_surface = wlr_scene_surface_try_from_buffer(scene_buffer);
+ 	if (!scene_surface) {
+@@ -253,6 +262,7 @@ handle_pointer_destroy(struct wl_listener *listener, void *data)
+ 	free(pointer);
+ 
+ 	update_capabilities(seat);
++	leafdeck_pointers_changed(seat->server);
+ }
+ 
+ static void
+@@ -273,6 +283,7 @@ handle_new_pointer(struct cg_seat *seat, struct wlr_pointer *wlr_pointer)
+ 	wl_signal_add(&wlr_pointer->base.events.destroy, &pointer->destroy);
+ 
+ 	map_input_device_to_output(seat, &wlr_pointer->base, wlr_pointer->output_name);
++	leafdeck_pointers_changed(seat->server);
+ }
+ 
+ static void
+@@ -341,6 +352,8 @@ handle_key_event(struct wlr_keyboard *keyboard, struct cg_seat *seat, void *data
+ 
+ 	bool handled = false;
+ 	uint32_t modifiers = wlr_keyboard_get_modifiers(keyboard);
++	/* Leafdeck OS: Super and Alt+Tab go to Leafdeck even from a program's window. */
++	leafdeck_key(seat->server, syms, nsyms, modifiers, event->state == WL_KEYBOARD_KEY_STATE_PRESSED);
+ 	if ((modifiers & WLR_MODIFIER_ALT) && event->state == WL_KEYBOARD_KEY_STATE_PRESSED) {
+ 		/* If Alt is held down and this button was pressed, we
+ 		 * attempt to process it as a compositor
+@@ -667,7 +680,16 @@ handle_cursor_button(struct wl_listener *listener, void *data)
+ 	struct cg_seat *seat = wl_container_of(listener, seat, cursor_button);
+ 	struct wlr_pointer_button_event *event = data;
+ 
++	/* Leafdeck OS: moving a program's window by its own title bar takes the pointer until the button is let go. */
++	if (leafdeck_grab_button(seat->server, event->state == WL_POINTER_BUTTON_STATE_PRESSED)) {
++		process_cursor_motion(seat, event->time_msec, 0, 0, 0, 0);
++		return;
++	}
++
+ 	wlr_seat_pointer_notify_button(seat->seat, event->time_msec, event->button, event->state);
++	if (leafdeck_pointer_button(seat->server, event->state == WL_POINTER_BUTTON_STATE_PRESSED)) {
++		process_cursor_motion(seat, event->time_msec, 0, 0, 0, 0); // let go: the pointer is where it is again
++	}
+ 	press_cursor_button(seat, &event->pointer->base, event->time_msec, event->button, event->state, seat->cursor->x,
+ 			    seat->cursor->y);
+ 	wlr_idle_notifier_v1_notify_activity(seat->server->idle, seat->seat);
+@@ -681,12 +703,21 @@ process_cursor_motion(struct cg_seat *seat, uint32_t time_msec, double dx, doubl
+ 	struct wlr_seat *wlr_seat = seat->seat;
+ 	struct wlr_surface *surface = NULL;
+ 
+-	struct cg_view *view = desktop_view_at(seat->server, seat->cursor->x, seat->cursor->y, &surface, &sx, &sy);
+-	if (!view) {
+-		wlr_seat_pointer_clear_focus(wlr_seat);
+-	} else {
+-		wlr_seat_pointer_notify_enter(wlr_seat, surface, sx, sy);
+-		wlr_seat_pointer_notify_motion(wlr_seat, time_msec, sx, sy);
++	if (leafdeck_grab_motion(seat->server, seat->cursor->x, seat->cursor->y)) {
++		wlr_idle_notifier_v1_notify_activity(seat->server->idle, seat->seat);
++		return;
++	}
++
++	/* Leafdeck OS: a button pressed on a screen's Leafdeck window keeps the pointer there until it's let go (a window
++	   dragged to another screen: the page it started on sees it to the end). */
++	if (!leafdeck_held_motion(seat->server, time_msec, seat->cursor->x, seat->cursor->y)) {
++		struct cg_view *view = desktop_view_at(seat->server, seat->cursor->x, seat->cursor->y, &surface, &sx, &sy);
++		if (!view) {
++			wlr_seat_pointer_clear_focus(wlr_seat);
++		} else {
++			wlr_seat_pointer_notify_enter(wlr_seat, surface, sx, sy);
++			wlr_seat_pointer_notify_motion(wlr_seat, time_msec, sx, sy);
++		}
+ 	}
+ 
+ 	if (dx != 0 || dy != 0) {
+@@ -1026,6 +1057,7 @@ seat_set_focus(struct cg_seat *seat, struct cg_view *view)
+ 		wlr_seat_keyboard_notify_enter(wlr_seat, view->wlr_surface, NULL, 0, NULL);
+ 	}
+ 
++	leafdeck_focus_changed(view);
+ 	process_cursor_motion(seat, -1, 0, 0, 0, 0);
+ }
+ 
+diff --git a/server.h b/server.h
+index 27f212a..61c5719 100644
+--- a/server.h
++++ b/server.h
+@@ -22,6 +22,8 @@ enum cg_multi_output_mode {
+ 	CAGE_MULTI_OUTPUT_MODE_LAST,
+ };
+ 
++struct cg_leafdeck;
++
+ struct cg_server {
+ 	struct wl_display *wl_display;
+ 	struct wl_list views;
+@@ -42,6 +44,10 @@ struct cg_server {
+ 	struct wlr_scene_output_layout *scene_output_layout;
+ 
+ 	struct wlr_scene *scene;
++	/* Leafdeck OS (leafdeck.c): Leafdeck's main window, then programs' windows, then Leafdeck's other windows. */
++	struct wlr_scene_tree *shell_layer;
++	struct wlr_scene_tree *native_layer;
++	struct cg_leafdeck *leafdeck;
+ 	/* Includes disabled outputs; depending on the output_mode
+ 	 * some outputs may be disabled. */
+ 	struct wl_list outputs; // cg_output::link
+diff --git a/view.c b/view.c
+index 94fd75e..82c0952 100644
+--- a/view.c
++++ b/view.c
+@@ -21,6 +21,7 @@
+ #include "seat.h"
+ #include "server.h"
+ #include "view.h"
++#include "leafdeck.h"
+ #if CAGE_HAS_XWAYLAND
+ #include "xwayland.h"
+ #endif
+@@ -93,7 +94,14 @@ view_center(struct cg_view *view, struct wlr_box *layout_box)
+ void
+ view_position(struct cg_view *view)
+ {
++	if (view->native) {
++		return; // Leafdeck places it
++	}
+ 	struct wlr_box layout_box;
++	if (leafdeck_screen_box(view, &layout_box)) {
++		view_maximize(view, &layout_box); // a Leafdeck window of one screen fills that screen
++		return;
++	}
+ 	wlr_output_layout_get_box(view->server->output_layout, NULL, &layout_box);
+ 
+ 	if (view_is_primary(view) || view_extends_output_layout(view, &layout_box)) {
+@@ -122,7 +130,12 @@ view_unmap(struct cg_view *view)
+ 	wlr_foreign_toplevel_handle_v1_destroy(view->foreign_toplevel_handle);
+ 	view->foreign_toplevel_handle = NULL;
+ 
+-	wlr_scene_node_destroy(&view->scene_tree->node);
++	leafdeck_view_unmapped(view); // a native window's tree goes with its group
++	if (view->scene_tree) {
++		wlr_scene_node_destroy(&view->scene_tree->node);
++		view->scene_tree = NULL;
++	}
++	view->native_overlay = false;
+ 
+ 	view->wlr_surface->data = NULL;
+ 	view->wlr_surface = NULL;
+@@ -147,7 +160,7 @@ handle_surface_request_close(struct wl_listener *listener, void *data)
+ void
+ view_map(struct cg_view *view, struct wlr_surface *surface)
+ {
+-	view->scene_tree = wlr_scene_subsurface_tree_create(&view->server->scene->tree, surface);
++	view->scene_tree = wlr_scene_subsurface_tree_create(leafdeck_view_parent(view, surface), surface);
+ 	if (!view->scene_tree)
+ 		goto fail;
+ 	view->scene_tree->node.data = view;
+@@ -163,6 +176,9 @@ view_map(struct cg_view *view, struct wlr_surface *surface)
+ 	{
+ 		view_position(view);
+ 	}
++	if (view->native_overlay) {
++		wlr_scene_node_set_position(&view->scene_tree->node, view->lx, view->ly);
++	}
+ 
+ 	wl_list_insert(&view->server->views, &view->link);
+ 
+@@ -175,6 +191,8 @@ view_map(struct cg_view *view, struct wlr_surface *surface)
+ 	view->request_close.notify = handle_surface_request_close;
+ 	wl_signal_add(&view->foreign_toplevel_handle->events.request_close, &view->request_close);
+ 
++	leafdeck_view_mapped(view);
++
+ 	seat_set_focus(view->server->seat, view);
+ 	return;
+ 
+diff --git a/view.h b/view.h
+index 53a04f8..639d63d 100644
+--- a/view.h
++++ b/view.h
+@@ -34,6 +34,15 @@ struct cg_view {
+ 	const struct cg_view_impl *impl;
+ 
+ 	struct wlr_foreign_toplevel_handle_v1 *foreign_toplevel_handle;
++
++	/* Leafdeck OS (leafdeck.c): a program's window shown in a Leafdeck frame, or its X11 menu. */
++	struct cg_native *native;
++	bool native_overlay;
++	bool ssd; // an xdg decoration negotiated server-side (Leafdeck's title bar)
++	/* Leafdeck OS: a Leafdeck window that fills one screen (its connector name), drawn at that screen's scale. */
++	char ld_screen[32];
++	struct wl_listener ld_commit;
++	bool ld_listening;
+ 	struct wl_listener request_activate;
+ 	struct wl_listener request_close;
+ };
+diff --git a/xdg_shell.c b/xdg_shell.c
+index c7d94f8..d080c38 100644
+--- a/xdg_shell.c
++++ b/xdg_shell.c
+@@ -13,22 +13,29 @@
+ #include <wlr/types/wlr_foreign_toplevel_management_v1.h>
+ #include <wlr/types/wlr_scene.h>
+ #include <wlr/types/wlr_xdg_shell.h>
++#include <wlr/util/edges.h>
+ #include <wlr/util/log.h>
+ 
+ #include "server.h"
+ #include "view.h"
+ #include "xdg_shell.h"
++#include "leafdeck.h"
+ 
+ static void
+ xdg_decoration_set_mode(struct cg_xdg_decoration *xdg_decoration)
+ {
+ 	enum wlr_xdg_toplevel_decoration_v1_mode mode;
+-	if (xdg_decoration->server->xdg_decoration) {
++	if (xdg_decoration->server->xdg_decoration ||
++	    leafdeck_surface_is_native(xdg_decoration->server, xdg_decoration->wlr_decoration->toplevel->base->surface)) {
+ 		mode = WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE;
+ 	} else {
+ 		mode = WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE;
+ 	}
+ 	wlr_xdg_toplevel_decoration_v1_set_mode(xdg_decoration->wlr_decoration, mode);
++	struct cg_xdg_shell_view *xdg_view = xdg_decoration->wlr_decoration->toplevel->base->data;
++	if (xdg_view) {
++		leafdeck_decoration(&xdg_view->view, mode == WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
++	}
+ }
+ 
+ static void
+@@ -199,7 +206,9 @@ set_fullscreen(struct cg_xdg_shell_view *xdg_shell_view, bool fullscreen)
+ 	 * display in fullscreen mode, so we set it here.
+ 	 */
+ 	struct wlr_box layout_box;
+-	wlr_output_layout_get_box(xdg_shell_view->view.server->output_layout, NULL, &layout_box);
++	if (!leafdeck_screen_box(&xdg_shell_view->view, &layout_box)) {
++		wlr_output_layout_get_box(xdg_shell_view->view.server->output_layout, NULL, &layout_box);
++	}
+ 	wlr_xdg_toplevel_set_size(xdg_shell_view->xdg_toplevel, layout_box.width, layout_box.height);
+ 	wlr_xdg_toplevel_set_fullscreen(xdg_shell_view->xdg_toplevel, fullscreen);
+ }
+@@ -213,6 +222,11 @@ handle_xdg_toplevel_request_fullscreen(struct wl_listener *listener, void *data)
+ 	if (!xdg_shell_view->xdg_toplevel->base->initialized) {
+ 		return;
+ 	}
++	if (xdg_shell_view->view.native) {
++		leafdeck_fullscreen_requested(&xdg_shell_view->view, fullscreen); // Leafdeck decides
++		wlr_xdg_surface_schedule_configure(xdg_shell_view->xdg_toplevel->base);
++		return;
++	}
+ 
+ 	set_fullscreen(xdg_shell_view, fullscreen);
+ }
+@@ -259,6 +273,19 @@ handle_xdg_toplevel_commit(struct wl_listener *listener, void *data)
+ 
+ 	wlr_xdg_toplevel_set_wm_capabilities(xdg_shell_view->xdg_toplevel, XDG_TOPLEVEL_WM_CAPABILITIES_FULLSCREEN);
+ 
++	/* Leafdeck OS: a program's window picks its own size first (Leafdeck makes a frame that size), drawn as if
++	   tiled: no shadows or rounded corners of its own, since it sits in Leafdeck's frame. */
++	if (leafdeck_surface_is_native(xdg_shell_view->view.server, xdg_shell_view->xdg_toplevel->base->surface)) {
++		wlr_xdg_toplevel_set_wm_capabilities(xdg_shell_view->xdg_toplevel,
++						     XDG_TOPLEVEL_WM_CAPABILITIES_FULLSCREEN |
++							     XDG_TOPLEVEL_WM_CAPABILITIES_MAXIMIZE |
++							     XDG_TOPLEVEL_WM_CAPABILITIES_MINIMIZE);
++		wlr_xdg_toplevel_set_tiled(xdg_shell_view->xdg_toplevel, WLR_EDGE_TOP | WLR_EDGE_BOTTOM | WLR_EDGE_LEFT |
++										 WLR_EDGE_RIGHT);
++		wlr_xdg_surface_schedule_configure(xdg_shell_view->xdg_toplevel->base);
++		return;
++	}
++
+ 	if (xdg_shell_view->xdg_toplevel->requested.fullscreen) {
+ 		set_fullscreen(xdg_shell_view, true);
+ 	} else {
+@@ -370,7 +397,7 @@ handle_new_xdg_popup(struct wl_listener *listener, void *data)
+ 	}
+ 	switch (parent->role) {
+ 	case WLR_XDG_SURFACE_ROLE_TOPLEVEL:;
+-		parent_scene_tree = view->scene_tree;
++		parent_scene_tree = leafdeck_popup_parent(view); // above the covers for a program's window
+ 		break;
+ 	case WLR_XDG_SURFACE_ROLE_POPUP:
+ 		parent_scene_tree = parent->data;
+diff --git a/xwayland.c b/xwayland.c
+index 89d7270..dc47abe 100644
+--- a/xwayland.c
++++ b/xwayland.c
+@@ -16,6 +16,7 @@
+ #include "server.h"
+ #include "view.h"
+ #include "xwayland.h"
++#include "leafdeck.h"
+ 
+ struct cg_xwayland_view *
+ xwayland_view_from_view(struct cg_view *view)
+@@ -115,6 +116,10 @@ handle_xwayland_surface_request_fullscreen(struct wl_listener *listener, void *d
+ {
+ 	struct cg_xwayland_view *xwayland_view = wl_container_of(listener, xwayland_view, request_fullscreen);
+ 	struct wlr_xwayland_surface *xwayland_surface = xwayland_view->xwayland_surface;
++	if (xwayland_view->view.native) {
++		leafdeck_fullscreen_requested(&xwayland_view->view, xwayland_surface->fullscreen); // Leafdeck decides
++		return;
++	}
+ 	wlr_xwayland_surface_set_fullscreen(xwayland_view->xwayland_surface, xwayland_surface->fullscreen);
+ 	if (xwayland_view->view.foreign_toplevel_handle) {
+ 		wlr_foreign_toplevel_handle_v1_set_fullscreen(xwayland_view->view.foreign_toplevel_handle,

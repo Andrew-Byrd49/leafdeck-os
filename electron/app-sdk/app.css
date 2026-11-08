@@ -1,0 +1,187 @@
+/* Leafdeck's base styles for user apps, served to every app at /_leafdeck/app.css.
+   These mirror Leafdeck's own app styles (public/css/app.css): same tokens, sizes and components, so an app
+   built with them looks like a built-in app. Colors follow Leafdeck's light/dark mode and accent (the bridge
+   sets data-theme and --ld-accent on <html>). Use the --ld-* variables and ld-* classes; keep app.css overrides small. */
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+:root {
+  color-scheme: dark;
+  --ld-accent: #34c77b;
+  --ld-accent-ink: #07130c;
+  --ld-accent-soft: color-mix(in srgb, var(--ld-accent) 22%, transparent);
+
+  --ld-text: light-dark(#1d1f1e, #f2f2f5);
+  --ld-text-2: light-dark(rgba(29, 31, 30, 0.68), rgba(235, 235, 245, 0.66));
+  --ld-text-3: light-dark(rgba(29, 31, 30, 0.46), rgba(235, 235, 245, 0.42));
+  --ld-line: light-dark(rgba(0, 0, 0, 0.09), rgba(255, 255, 255, 0.08));
+  --ld-line-2: light-dark(rgba(0, 0, 0, 0.15), rgba(255, 255, 255, 0.14));
+  --ld-field: light-dark(rgba(0, 0, 0, 0.045), rgba(255, 255, 255, 0.06));
+  --ld-hover: light-dark(rgba(0, 0, 0, 0.05), rgba(255, 255, 255, 0.06));
+
+  --ld-bg: light-dark(#f6f7f6, #1c1e21); /* the window background */
+  --ld-surface: light-dark(rgba(0, 0, 0, 0.036), rgba(255, 255, 255, 0.045)); /* panels and stat tiles */
+  --ld-surface-2: light-dark(rgba(0, 0, 0, 0.056), rgba(255, 255, 255, 0.07)); /* items inside a panel */
+  --ld-sheet: light-dark(#ffffff, #26282c); /* sheets and popovers */
+
+  --ld-green: light-dark(#1f9d45, #30d158);
+  --ld-red: light-dark(#e0352b, #ff6961);
+  --ld-yellow: light-dark(#b88a00, #ffd60a);
+  --ld-blue: light-dark(#1a6fd6, #64a8ff);
+  --ld-radius: 12px;
+
+  font-family: Inter, -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', system-ui, sans-serif;
+  font-size: 13px;
+  line-height: 1.4;
+  font-feature-settings: 'cv11', 'ss01';
+  -webkit-font-smoothing: antialiased;
+}
+:root[data-theme='light'] { color-scheme: light; }
+
+*, *::before, *::after { box-sizing: border-box; }
+html, body { margin: 0; min-height: 100%; }
+body { background: var(--ld-bg); color: var(--ld-text); }
+button, input, select, textarea { font: inherit; color: inherit; }
+button { cursor: default; }
+a { color: var(--ld-accent); }
+h1, h2, h3, h4 { margin: 0; letter-spacing: -0.01em; }
+h1 { font-size: 17px; font-weight: 650; }
+h2 { font-size: 13px; font-weight: 600; }
+h3 { font-size: 13px; font-weight: 550; }
+p { margin: 0; }
+[hidden] { display: none !important; }
+:focus-visible { outline: 2px solid var(--ld-accent); outline-offset: 1px; }
+::selection { background: var(--ld-accent-soft); }
+option { background: var(--ld-sheet); color: var(--ld-text); }
+input[type='checkbox'], input[type='radio'] { accent-color: var(--ld-accent); width: 15px; height: 15px; margin: 0; }
+
+::-webkit-scrollbar { width: 11px; height: 11px; }
+::-webkit-scrollbar-thumb { background: light-dark(rgba(0, 0, 0, 0.128), rgba(255, 255, 255, 0.16)); border-radius: 10px; border: 3px solid transparent; background-clip: content-box; }
+::-webkit-scrollbar-track { background: transparent; }
+
+/* Icons from leafdeck.icon() or <span data-icon="name"> */
+.ld-ic { flex-shrink: 0; vertical-align: -0.2em; }
+
+/* ---------------- Layout ---------------- */
+
+/* The page fills the window, like a built-in app. No centered column, no page title (the window title is the app's name). */
+.ld-page { display: flex; flex-direction: column; gap: 12px; padding: 16px 18px 20px; min-height: 100vh; }
+.ld-row { display: flex; gap: 8px; align-items: center; min-width: 0; }
+.ld-grow { flex: 1; min-width: 0; }
+.ld-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; }
+.ld-split { display: grid; grid-template-columns: 260px 1fr; gap: 12px; min-height: 0; }
+@media (max-width: 640px) { .ld-split { grid-template-columns: 1fr; } }
+.ld-section-title { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; font-size: 12.5px; font-weight: 600; }
+.ld-section-title small { color: var(--ld-text-3); font-weight: 400; font-size: 11.5px; }
+.ld-muted { color: var(--ld-text-2); }
+.ld-small-text { font-size: 11.5px; color: var(--ld-text-3); }
+.ld-head { display: flex; flex-direction: column; gap: 2px; } /* kept for older apps; prefer the window toolbar */
+
+/* Stat tiles: a row of key numbers at the top, like Leafdeck's own apps. */
+.ld-summary { display: flex; flex-wrap: wrap; gap: 10px; }
+.ld-stat { flex: 1 1 130px; min-width: 0; padding: 10px 14px; border-radius: 12px; background: var(--ld-surface); border: 0.5px solid var(--ld-line); }
+.ld-stat > span { font-size: 11.5px; color: var(--ld-text-2); }
+.ld-stat > b { display: block; margin-top: 2px; font-size: 20px; font-weight: 650; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ld-stat > small { display: block; font-size: 11px; color: var(--ld-text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ld-stat.good > b { color: var(--ld-green); }
+.ld-stat.bad > b { color: var(--ld-red); }
+.ld-stat.warn > b { color: var(--ld-yellow); }
+
+/* Panels: a quiet translucent surface (never a white card). */
+.ld-panel, .ld-card { display: flex; flex-direction: column; gap: 10px; padding: 12px 14px; border-radius: var(--ld-radius); background: var(--ld-surface); border: 0.5px solid var(--ld-line); min-width: 0; }
+
+/* Board: columns of items, like Tasks. */
+.ld-board { display: flex; align-items: flex-start; gap: 12px; overflow-x: auto; padding-bottom: 6px; }
+.ld-col { flex: 0 0 236px; display: flex; flex-direction: column; gap: 8px; padding: 8px; border-radius: 12px; background: light-dark(rgba(0, 0, 0, 0.028), rgba(255, 255, 255, 0.035)); border: 0.5px solid var(--ld-line); }
+.ld-col > header { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; padding: 2px 6px 1px; font-weight: 600; font-size: 12.5px; }
+.ld-col > header small { color: var(--ld-text-3); font-weight: 400; font-size: 11.5px; }
+
+/* Items: a raised row or card inside a panel or column. */
+.ld-item { position: relative; display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border-radius: 10px; background: var(--ld-surface-2); border: 0.5px solid light-dark(rgba(0, 0, 0, 0.056), rgba(255, 255, 255, 0.07)); box-shadow: 0 1px 2px light-dark(rgba(0, 0, 0, 0.09), rgba(0, 0, 0, 0.2)); text-align: left; min-width: 0; }
+button.ld-item:hover, a.ld-item:hover, .ld-item.ld-clickable:hover { background: light-dark(rgba(0, 0, 0, 0.08), rgba(255, 255, 255, 0.1)); }
+.ld-item > b { font-weight: 550; font-size: 13px; }
+.ld-item > small { color: var(--ld-text-3); font-size: 11.5px; }
+.ld-item-foot { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 6px; font-size: 11.5px; color: var(--ld-text-2); }
+
+/* Lists: rows with a hover, separated by hairlines. */
+.ld-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.ld-list > li { display: flex; align-items: center; gap: 10px; min-height: 38px; padding: 7px 10px; border-radius: 8px; }
+.ld-list > li + li { box-shadow: inset 0 0.5px 0 var(--ld-line); }
+.ld-list > li:hover { background: var(--ld-hover); }
+.ld-list > li .ld-sub { display: block; color: var(--ld-text-3); font-size: 11.5px; }
+
+/* Tables, like Finance: sticky header, hairline rows, hover. */
+.ld-table { width: 100%; border-collapse: separate; border-spacing: 0; }
+.ld-table th { position: sticky; top: 0; z-index: 1; padding: 8px 10px; text-align: left; font-size: 11.5px; font-weight: 500; color: var(--ld-text-3); background: light-dark(rgba(242, 243, 244, 0.97), rgba(33, 35, 38, 0.96)); border-bottom: 0.5px solid var(--ld-line); white-space: nowrap; }
+.ld-table td { padding: 8px 10px; border-bottom: 0.5px solid light-dark(rgba(0, 0, 0, 0.04), rgba(255, 255, 255, 0.05)); vertical-align: middle; }
+.ld-table tbody tr:hover td { background: light-dark(rgba(0, 0, 0, 0.032), rgba(255, 255, 255, 0.04)); }
+.ld-table td:first-child, .ld-table th:first-child { padding-left: 12px; }
+.ld-table .ld-num { text-align: right; font-variant-numeric: tabular-nums; }
+.ld-table td small { display: block; color: var(--ld-text-3); font-size: 11.5px; }
+
+/* ---------------- Controls ---------------- */
+
+.ld-btn { height: 30px; padding: 0 14px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; border-radius: 8px; border: 0.5px solid light-dark(rgba(0, 0, 0, 0.112), rgba(255, 255, 255, 0.14)); background: light-dark(rgba(0, 0, 0, 0.064), rgba(255, 255, 255, 0.08)); font-size: 13px; font-weight: 500; text-decoration: none; white-space: nowrap; color: var(--ld-text); }
+.ld-btn:hover { background: light-dark(rgba(0, 0, 0, 0.104), rgba(255, 255, 255, 0.13)); }
+.ld-btn:disabled { opacity: 0.45; pointer-events: none; }
+.ld-btn.ld-primary { background: var(--ld-accent); border-color: transparent; color: var(--ld-accent-ink); font-weight: 600; }
+.ld-btn.ld-primary:hover { filter: brightness(1.08); }
+.ld-btn.ld-small { height: 26px; padding: 0 10px; font-size: 12px; border-radius: 7px; }
+.ld-btn.ld-danger { color: var(--ld-red); }
+.ld-icon-btn { width: 26px; height: 26px; display: inline-grid; place-items: center; border: 0; border-radius: 6px; background: none; color: var(--ld-text-3); }
+.ld-icon-btn:hover { background: var(--ld-hover); color: var(--ld-text); }
+.ld-add { display: flex; align-items: center; gap: 5px; padding: 7px 6px; border: 0; border-radius: 7px; background: none; color: var(--ld-text-3); font-size: 12px; }
+.ld-add:hover { background: var(--ld-hover); color: var(--ld-text); }
+
+/* Segmented control (for in-page choices; prefer the window toolbar for view switches). */
+.ld-seg { display: inline-flex; padding: 2px; border-radius: 8px; background: light-dark(rgba(0, 0, 0, 0.056), rgba(255, 255, 255, 0.07)); flex-shrink: 0; }
+.ld-seg > button { height: 24px; min-width: 30px; padding: 0 9px; border: 0; border-radius: 6px; background: none; color: var(--ld-text-2); display: inline-flex; align-items: center; justify-content: center; gap: 5px; font-size: 12.5px; }
+.ld-seg > button.on, .ld-seg > button[aria-pressed='true'] { background: light-dark(rgba(0, 0, 0, 0.128), rgba(255, 255, 255, 0.16)); color: var(--ld-text); box-shadow: 0 1px 2px light-dark(rgba(0, 0, 0, 0.135), rgba(0, 0, 0, 0.3)); }
+
+/* Fields: a label above the control. */
+.ld-field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.ld-field > span { font-size: 11.5px; font-weight: 500; color: var(--ld-text-2); }
+.ld-field.ld-span2 { grid-column: 1 / -1; }
+.ld-field.ld-check { flex-direction: row; align-items: center; gap: 9px; }
+.ld-field.ld-check > span { color: var(--ld-text); font-size: 13px; font-weight: 400; }
+.ld-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 14px; }
+@media (max-width: 520px) { .ld-form-grid { grid-template-columns: 1fr; } }
+.ld-input, .ld-select, .ld-textarea,
+.ld-field input:not([type='checkbox']):not([type='radio']), .ld-field select, .ld-field textarea {
+  width: 100%; min-width: 0; padding: 7px 10px; border-radius: 7px; border: 0.5px solid light-dark(rgba(0, 0, 0, 0.104), rgba(255, 255, 255, 0.13)); background: var(--ld-field); font-size: 13px; outline: none; transition: border-color 0.12s, box-shadow 0.12s;
+}
+.ld-row > .ld-input, .ld-row > .ld-select { flex: 1; width: auto; }
+.ld-textarea, .ld-field textarea { min-height: 80px; resize: vertical; line-height: 1.5; }
+.ld-input:focus, .ld-select:focus, .ld-textarea:focus, .ld-field input:focus, .ld-field select:focus, .ld-field textarea:focus { border-color: var(--ld-accent); box-shadow: 0 0 0 3px var(--ld-accent-soft); }
+
+/* Pills (status) and chips (tags) */
+.ld-pill { display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 99px; font-size: 11.5px; font-weight: 500; white-space: nowrap; background: light-dark(rgba(0, 0, 0, 0.064), rgba(255, 255, 255, 0.08)); color: var(--ld-text-2); }
+.ld-pill.green { background: rgba(48, 209, 88, 0.16); color: light-dark(#27a54a, #63e286); }
+.ld-pill.blue { background: rgba(10, 132, 255, 0.18); color: light-dark(#0a63c2, #7dbcff); }
+.ld-pill.purple { background: rgba(191, 90, 242, 0.18); color: light-dark(#710ac2, #d6a2ff); }
+.ld-pill.yellow { background: rgba(255, 214, 10, 0.14); color: light-dark(#c2990a, #ffdc62); }
+.ld-pill.red { background: rgba(255, 69, 58, 0.17); color: light-dark(#c2160a, #ff8178); }
+.ld-chip { display: inline-flex; align-items: center; margin: 1px 4px 1px 0; padding: 1px 7px; border-radius: 5px; background: light-dark(rgba(0, 0, 0, 0.056), rgba(255, 255, 255, 0.07)); font-size: 11.5px; color: var(--ld-text-2); }
+
+/* Progress bar */
+.ld-bar { position: relative; height: 5px; border-radius: 3px; background: var(--ld-surface-2); overflow: hidden; }
+.ld-bar > span { position: absolute; inset: 0 auto 0 0; border-radius: 3px; background: var(--ld-accent); }
+
+/* Empty states: centered, quiet, with one action. */
+.ld-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 60px 24px; text-align: center; color: var(--ld-text-2); }
+.ld-empty-title { font-size: 15px; font-weight: 600; color: var(--ld-text); }
+.ld-empty p { margin: 0 0 6px; color: var(--ld-text-3); }
+.ld-empty.small { padding: 30px 12px; }
+
+/* ---------------- Sheets (add/edit forms) ---------------- */
+/* A sheet drops down from the top of the window, like Leafdeck's record forms:
+   <div class="ld-sheet-wrap" hidden><form class="ld-sheet"> head / body / foot </form></div>
+   Show it by removing [hidden] and adding .open on the next frame. Escape and a click outside should close it. */
+.ld-sheet-wrap { position: fixed; inset: 0; z-index: 50; display: flex; justify-content: center; align-items: flex-start; background: light-dark(rgba(0, 0, 0, 0.154), rgba(0, 0, 0, 0.28)); opacity: 0; transition: opacity 0.18s; }
+.ld-sheet-wrap.open { opacity: 1; }
+.ld-sheet { width: min(560px, 94%); max-height: calc(100% - 14px); display: flex; flex-direction: column; background: var(--ld-sheet); border: 0.5px solid var(--ld-line-2); border-top: 0; border-radius: 0 0 14px 14px; box-shadow: 0 24px 60px light-dark(rgba(0, 0, 0, 0.248), rgba(0, 0, 0, 0.55)); transform: translateY(-14px); transition: transform 0.2s cubic-bezier(0.2, 0.8, 0.2, 1); }
+.ld-sheet-wrap.open .ld-sheet { transform: none; }
+.ld-sheet-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; padding: 18px 22px 12px; }
+.ld-sheet-head h2 { font-size: 17px; font-weight: 650; }
+.ld-sheet-body { overflow: auto; padding: 2px 22px 16px; min-height: 0; }
+.ld-sheet-foot { display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 12px 22px; border-top: 0.5px solid var(--ld-line); }

@@ -1,0 +1,21 @@
+# Leafdeck OS first-time setup: creates the computer's account before the first sign-in (leafdeck-setup).
+[Unit]
+Description=Leafdeck OS setup
+After=systemd-user-sessions.service plymouth-quit-wait.service
+Before=greetd.service
+Conflicts=getty@tty1.service
+ConditionPathExists=!/var/lib/leafdeck/setup-done
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/leafdeck/leafdeck-setup
+StandardInput=tty
+StandardOutput=tty
+StandardError=inherit
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+
+[Install]
+WantedBy=graphical.target

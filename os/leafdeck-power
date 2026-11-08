@@ -1,0 +1,57 @@
+#!/bin/sh
+# Leafdeck OS: the power settings only root can change, for Settings → Power. Runs as root through a sudo rule that
+# os/setup-fedora.sh installs (the image ships it in /etc/sudoers.d), so Leafdeck needs no password. Every argument is
+# checked here; nothing else can be written.
+#   leafdeck-power --check                 exit 0 (Leafdeck shows these settings only when this works)
+#   leafdeck-power buttons LID LID_AC KEY  what logind does when the lid closes (on battery, plugged in) and when the
+#                                          power button is pressed: suspend, hibernate, suspend-then-hibernate, lock,
+#                                          ignore; the button also poweroff
+#   leafdeck-power charge MODE             the battery's charging mode, one its charge_types lists (Lenovo: Long_Life…)
+#   leafdeck-power limit PERCENT           stop charging at 50–100% (charge_control_end_threshold)
+set -eu
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+CONF=/etc/systemd/logind.conf.d/60-leafdeck-power.conf
+
+fail() { echo "$*" >&2; exit 2; }
+lid() { case "$1" in suspend|hibernate|suspend-then-hibernate|lock|ignore) ;; *) fail "Unknown lid action: $1" ;; esac; }
+batteries() { for b in /sys/class/power_supply/*; do [ "$(cat "$b/type" 2>/dev/null)" = Battery ] && [ "$(cat "$b/scope" 2>/dev/null)" != Device ] && echo "$b"; done; }
+
+case "${1:-}" in
+  --check) exit 0 ;;
+  buttons)
+    [ $# -eq 4 ] || fail "usage: leafdeck-power buttons LID LID_AC KEY"
+    lid "$2"
+    lid "$3"
+    case "$4" in suspend|hibernate|poweroff|ignore) ;; *) fail "Unknown power button action: $4" ;; esac
+    mkdir -p "${CONF%/*}"
+    # After 50-leafdeck.conf (the defaults), so these win. logind rereads its settings on SIGHUP.
+    printf '# Settings → Power in Leafdeck (written by leafdeck-power).\n[Login]\nHandleLidSwitch=%s\nHandleLidSwitchExternalPower=%s\nHandlePowerKey=%s\n' "$2" "$3" "$4" > "$CONF.tmp"
+    mv -f "$CONF.tmp" "$CONF"
+    systemctl kill -s HUP systemd-logind
+    ;;
+  charge)
+    [ $# -eq 2 ] || fail "usage: leafdeck-power charge MODE"
+    case "$2" in *[!A-Za-z_]*|'') fail "Unknown charging mode: $2" ;; esac
+    done=
+    for b in $(batteries); do
+      [ -w "$b/charge_types" ] || continue
+      tr -d '[]' < "$b/charge_types" | tr ' ' '\n' | grep -qx "$2" || fail "This battery has no $2 mode"
+      echo "$2" > "$b/charge_types"
+      done=1
+    done
+    [ -n "$done" ] || fail "This battery's charging can't be changed"
+    ;;
+  limit)
+    [ $# -eq 2 ] || fail "usage: leafdeck-power limit PERCENT"
+    case "$2" in *[!0-9]*|'') fail "Not a percentage: $2" ;; esac
+    [ "$2" -ge 50 ] && [ "$2" -le 100 ] || fail "The limit is 50 to 100%"
+    done=
+    for b in $(batteries); do
+      [ -w "$b/charge_control_end_threshold" ] || continue
+      echo "$2" > "$b/charge_control_end_threshold"
+      done=1
+    done
+    [ -n "$done" ] || fail "This battery has no charge limit"
+    ;;
+  *) fail "usage: leafdeck-power --check | buttons LID LID_AC KEY | charge MODE | limit PERCENT" ;;
+esac

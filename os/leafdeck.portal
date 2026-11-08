@@ -1,0 +1,5 @@
+# Leafdeck OS's desktop portal backend (electron/desktop-helper.py, running with Leafdeck): the file picker and print
+# sheet every program gets, and "allow this app to…" questions. Installed in /usr/share/xdg-desktop-portal/portals.
+[portal]
+DBusName=org.freedesktop.impl.portal.desktop.leafdeck
+Interfaces=org.freedesktop.impl.portal.FileChooser;org.freedesktop.impl.portal.Print;org.freedesktop.impl.portal.AppChooser;org.freedesktop.impl.portal.Access;

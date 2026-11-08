@@ -1,0 +1,20 @@
+#!/bin/sh
+# Leafdeck OS sign-in screen, started by greetd (/etc/greetd/config.toml) as the greetd system account: Leafdeck in
+# greeter mode (electron/greeter.cjs) inside cage. When it has signed someone in it exits, and greetd starts their
+# Leafdeck session. If it can't start (three failures in a row, each within 20 seconds), the text sign-in takes over,
+# so the computer can always be signed in to.
+export XDG_SESSION_TYPE=wayland XDG_CURRENT_DESKTOP=Leafdeck LEAFDECK_GREETER=1 ELECTRON_OZONE_PLATFORM_HINT=wayland
+flags="--ozone-platform=wayland --password-store=basic"
+# In a virtual machine, software rendering (see leafdeck-session).
+if systemd-detect-virt --vm --quiet; then
+  export WLR_RENDERER=pixman WLR_NO_HARDWARE_CURSORS=1
+  flags="$flags --disable-gpu"
+fi
+fails=0
+while [ "$fails" -lt 3 ]; do
+  started=$(date +%s)
+  cage -s -- /usr/lib/leafdeck/leafdeck $flags && exit 0
+  if [ $(( $(date +%s) - started )) -lt 20 ]; then fails=$((fails + 1)); else fails=0; fi
+done
+echo "Leafdeck's sign-in screen couldn't start; signing in with text instead." >&2
+exec agreety --cmd /usr/libexec/leafdeck/leafdeck-session

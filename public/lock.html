@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Leafdeck Locked</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="/css/lock.css" />
+</head>
+<body>
+  <div class="lk-wall" id="wall"></div>
+  <main class="lk">
+    <div class="lk-time" id="time"></div>
+    <div class="lk-date" id="date"></div>
+    <form class="lk-card" id="form" autocomplete="off">
+      <div class="lk-avatar" id="avatar"></div>
+      <div class="lk-name" id="name"></div>
+      <div class="lk-note" id="note" hidden></div>
+      <div class="lk-field">
+        <input id="pw" type="password" placeholder="Password" aria-label="Password" autofocus />
+        <button type="submit" class="lk-go" aria-label="Unlock"><svg viewBox="0 0 24 24"><path d="M5 12h13M13 6l6 6-6 6" /></svg></button>
+      </div>
+      <div class="lk-msg" id="msg" role="status" aria-live="polite"></div>
+    </form>
+  </main>
+  <div class="lk-kb" id="kb" hidden></div>
+  <footer class="lk-foot">
+    <button type="button" id="safeToggle" class="lk-safe" aria-pressed="false" hidden><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" /><circle cx="12" cy="12" r="3.5" /><path d="M9.5 9.5 5.6 5.6M14.5 9.5l3.9-3.9M14.5 14.5l3.9 3.9M9.5 14.5l-3.9 3.9" /></svg><span>Safe mode</span></button>
+    <button type="button" id="kbToggle" aria-pressed="false"><svg viewBox="0 0 24 24"><rect x="2.5" y="6" width="19" height="12" rx="2.5" /><path d="M6 10h.01M9.5 10h.01M13 10h.01M16.5 10h.01M7.5 14h9" /></svg><span>Keyboard</span></button>
+    <button type="button" data-power="restart"><svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.3-5.6M20 4v5h-5" /></svg><span>Restart</span></button>
+    <button type="button" data-power="shutdown"><svg viewBox="0 0 24 24"><path d="M12 3v8" /><path d="M6.3 6.8a8 8 0 1 0 11.4 0" /></svg><span>Shut down</span></button>
+  </footer>
+  <script src="/js/lock.js"></script>
+</body>
+</html>

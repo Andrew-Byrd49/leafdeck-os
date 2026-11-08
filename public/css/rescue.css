@@ -1,0 +1,39 @@
+/* Leafdeck OS rescue screen (public/rescue.html, Ctrl+Alt+Delete). Same look as the lock screen (css/lock.css). */
+:root {
+  --accent: #34c77b;
+  --accent-soft: color-mix(in srgb, var(--accent) 22%, transparent);
+  color-scheme: dark;
+  font-family: Inter, -apple-system, 'Segoe UI', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: radial-gradient(70% 60% at 50% 30%, #13201a, #0b0f0d); color: #f2f2f5; user-select: none; }
+button { font: inherit; color: inherit; cursor: pointer; }
+
+.rs { max-width: 720px; margin: 0 auto; padding: 10vh 16px 32px; display: flex; flex-direction: column; align-items: center; }
+h1 { margin: 0; font-size: 30px; font-weight: 650; letter-spacing: -0.02em; text-align: center; }
+.rs-sub { margin: 8px 0 24px; color: rgba(235, 235, 245, 0.7); text-align: center; }
+
+.rs-card { width: 100%; border-radius: 16px; background: rgba(20, 26, 22, 0.6); border: 1px solid rgba(255, 255, 255, 0.1); overflow: hidden; }
+.rs-head, .rs-row { display: grid; grid-template-columns: 1fr 64px 84px 92px; align-items: center; gap: 10px; padding: 0 14px; }
+.rs-head { height: 34px; font-size: 12px; color: rgba(235, 235, 245, 0.55); border-bottom: 1px solid rgba(255, 255, 255, 0.08); }
+.rs-list { max-height: 42vh; overflow-y: auto; }
+.rs-row { min-height: 44px; font-size: 14px; border-bottom: 1px solid rgba(255, 255, 255, 0.05); }
+.rs-row:last-child { border-bottom: 0; }
+.rs-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rs-name small { display: block; font-size: 11.5px; color: rgba(235, 235, 245, 0.5); overflow: hidden; text-overflow: ellipsis; }
+.rs-num { font-variant-numeric: tabular-nums; color: rgba(235, 235, 245, 0.8); }
+.rs-hot { color: #ffb86b; }
+.rs-name .rs-stuck { color: #ffb4ae; }
+.rs-row button, .rs-actions button, .rs-back { height: 32px; padding: 0 12px; border-radius: 999px; border: 1px solid rgba(255, 255, 255, 0.14); background: rgba(255, 255, 255, 0.06); font-size: 13px; }
+.rs-row button:hover, .rs-actions button:hover, .rs-back:hover { background: rgba(255, 255, 255, 0.14); }
+.rs-empty { padding: 16px 14px; color: rgba(235, 235, 245, 0.55); font-size: 14px; }
+
+.rs-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; margin-top: 22px; }
+.rs-actions button { height: 38px; padding: 0 16px; font-size: 14px; }
+.rs-actions [data-act='reload-desktop'] { background: var(--accent); border-color: transparent; color: #07130c; font-weight: 600; }
+.rs-actions button.armed { background: linear-gradient(180deg, #ff6a60, #e3352b); border-color: transparent; color: #fff; }
+.rs-back { margin-top: 18px; height: 36px; background: none; border-color: transparent; color: rgba(235, 235, 245, 0.75); }
+kbd { margin-left: 6px; padding: 1px 6px; border-radius: 5px; border: 1px solid rgba(255, 255, 255, 0.2); font: 11px inherit; }
+.rs-msg { min-height: 20px; margin-top: 10px; font-size: 13px; color: rgba(255, 180, 174, 0.95); }
+@media (max-width: 520px) { .rs-head, .rs-row { grid-template-columns: 1fr 48px 72px; } .rs-head span:last-child { display: none; } .rs-row button { grid-column: 1 / -1; justify-self: start; margin-bottom: 8px; } }

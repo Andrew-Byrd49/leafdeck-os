@@ -1,0 +1,12 @@
+# Normalize line endings in the repository; shell and Python scripts must stay LF so they run on Linux.
+* text=auto
+*.sh text eol=lf
+*.py text eol=lf
+os/leafdeck-session text eol=lf
+os/leafdeck-boot-windows text eol=lf
+os/*.desktop text eol=lf
+*.png binary
+*.jpg binary
+*.webp binary
+*.ico binary
+*.woff2 binary

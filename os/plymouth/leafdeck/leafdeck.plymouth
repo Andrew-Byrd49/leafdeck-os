@@ -1,0 +1,54 @@
+[Plymouth Theme]
+Name=Leafdeck
+Description=Leafdeck OS: the Leafdeck logo on Leafdeck's background, with a spinner (the same frames as Plymouth's Spinner theme).
+ModuleName=two-step
+
+[two-step]
+Font=Sans 12
+TitleFont=Sans Light 28
+ImageDir=/usr/share/plymouth/themes/leafdeck
+DialogHorizontalAlignment=.5
+DialogVerticalAlignment=.62
+TitleHorizontalAlignment=.5
+TitleVerticalAlignment=.382
+HorizontalAlignment=.5
+VerticalAlignment=.72
+WatermarkHorizontalAlignment=.5
+WatermarkVerticalAlignment=.42
+Transition=none
+TransitionDuration=0.0
+BackgroundStartColor=0x0b0f0d
+BackgroundEndColor=0x0b0f0d
+ProgressBarBackgroundColor=0x1e2622
+ProgressBarForegroundColor=0x34c77b
+MessageBelowAnimation=true
+
+[boot-up]
+UseEndAnimation=false
+
+[shutdown]
+UseEndAnimation=false
+
+[reboot]
+UseEndAnimation=false
+
+[updates]
+SuppressMessages=true
+ProgressBarShowPercentComplete=true
+UseProgressBar=true
+Title=Installing updates…
+SubTitle=Don’t turn off your computer
+
+[system-upgrade]
+SuppressMessages=true
+ProgressBarShowPercentComplete=true
+UseProgressBar=true
+Title=Updating Leafdeck OS…
+SubTitle=Don’t turn off your computer
+
+[firmware-upgrade]
+SuppressMessages=true
+ProgressBarShowPercentComplete=true
+UseProgressBar=true
+Title=Updating firmware…
+SubTitle=Don’t turn off your computer

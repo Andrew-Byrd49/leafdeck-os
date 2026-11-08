@@ -1,0 +1,180 @@
+#!/usr/bin/python3 -I
+# Leafdeck OS sign-in PIN: a short number that signs in and unlocks, as well as the account password.
+#
+# Each account's PIN is kept as a salted scrypt hash in /var/lib/leafdeck-pin/<user>, readable only by root. Two ways in:
+#   - The sign-in screen: greetd's PAM stack runs this (pam_exec, see os/use-leafdeck-signin.sh). `pam` checks what was
+#     typed as a PIN (auth), and resets the wrong-PIN count after any successful sign-in (account).
+#   - Leafdeck, as you: through a sudo rule that allows only the commands below.
+#       status    {"set": bool, "locked": bool}
+#       check     the PIN on stdin; exit 0 if right
+#       set       {"password", "pin"} on stdin; the account password is required
+#       remove    the account password on stdin
+#       reset     the account password on stdin; clears the wrong-PIN count (after unlocking with the password)
+# After 5 wrong PINs in a row (sign-in screen and lock screen together) the PIN stops working until the password is used.
+import fcntl
+import hashlib
+import hmac
+import json
+import os
+import pwd
+import secrets
+import subprocess
+import sys
+
+STORE = '/var/lib/leafdeck-pin'
+MAX_FAILS = 5
+CHKPWD = '/usr/sbin/unix_chkpwd'
+SCRYPT = {'n': 2**15, 'r': 8, 'p': 1, 'maxmem': 64 * 1024 * 1024, 'dklen': 32}
+
+
+def is_pin(s):
+    return s.isascii() and s.isdigit() and 4 <= len(s) <= 12
+
+
+def kdf(pin, salt):
+    return hashlib.scrypt(pin.encode(), salt=salt, **SCRYPT)
+
+
+def record_path(user):
+    return os.path.join(STORE, user)
+
+
+def store_lock():
+    """One change at a time (the sign-in screen and Leafdeck may both be checking)."""
+    os.makedirs(STORE, 0o711, exist_ok=True)
+    os.chmod(STORE, 0o711)  # others may see whether a PIN is set (the sign-in screen says "PIN or password"), not read it
+    f = open(os.path.join(STORE, '.lock'), 'a')
+    fcntl.flock(f, fcntl.LOCK_EX)
+    return f
+
+
+def load(user):
+    try:
+        with open(record_path(user)) as f:
+            rec = json.load(f)
+        bytes.fromhex(rec['salt']), bytes.fromhex(rec['hash'])
+        rec['fails'] = int(rec.get('fails', 0))
+        return rec
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def save(user, rec):
+    tmp = record_path(user) + '.new'
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, 'w') as f:
+        json.dump(rec, f)
+    os.replace(tmp, record_path(user))
+
+
+def check_pin(user, pin):
+    """True if right. Wrong ones count; once locked, nothing is checked until the password resets it."""
+    if not is_pin(pin):
+        return False
+    with store_lock():
+        rec = load(user)
+        if not rec or rec['fails'] >= MAX_FAILS:
+            return False
+        ok = hmac.compare_digest(kdf(pin, bytes.fromhex(rec['salt'])), bytes.fromhex(rec['hash']))
+        rec['fails'] = 0 if ok else rec['fails'] + 1
+        save(user, rec)
+        return ok
+
+
+def reset_fails(user):
+    with store_lock():
+        rec = load(user)
+        if rec and rec['fails']:
+            rec['fails'] = 0
+            save(user, rec)
+
+
+def check_password(user, password):
+    """The account password, checked by unix_chkpwd over a real pipe (SELinux won't let it read an inherited socket)."""
+    r, w = os.pipe()
+    p = subprocess.Popen([CHKPWD, user, 'nonull'], stdin=r, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True)
+    os.close(r)
+    try:
+        os.write(w, password.encode() + b'\0')
+    except OSError:
+        pass
+    os.close(w)
+    return p.wait() == 0
+
+
+def read_stdin():
+    return sys.stdin.buffer.read(4096).decode('utf-8', 'replace').rstrip('\0').rstrip('\n')
+
+
+def fail(msg, code=1):
+    print(msg, file=sys.stderr)
+    sys.exit(code)
+
+
+def account(name):
+    try:
+        u = pwd.getpwnam(name or '')
+    except KeyError:
+        fail('No such account')
+    if u.pw_uid < 1000:
+        fail('Not a person’s account')
+    return u.pw_name
+
+
+def main():
+    cmd = sys.argv[1] if len(sys.argv) > 1 else ''
+    if os.geteuid() != 0:
+        fail('Run through sudo')
+
+    # From greetd's PAM stack. sudo clears PAM_* and its rule doesn't allow `pam`, so this is only reached from PAM.
+    if cmd == 'pam':
+        if 'SUDO_USER' in os.environ:
+            fail('Not allowed')
+        user = account(os.environ.get('PAM_USER'))
+        kind = os.environ.get('PAM_TYPE')
+        if kind == 'auth':
+            sys.exit(0 if check_pin(user, read_stdin()) else 1)
+        if kind == 'account':
+            reset_fails(user)
+            sys.exit(0)
+        sys.exit(1)
+
+    # From Leafdeck, as the person signed in: sudo says who.
+    user = account(os.environ.get('SUDO_USER'))
+    if str(pwd.getpwnam(user).pw_uid) != os.environ.get('SUDO_UID'):
+        fail('Not allowed')
+    if cmd == 'status':
+        rec = load(user)
+        print(json.dumps({'set': bool(rec), 'locked': bool(rec and rec['fails'] >= MAX_FAILS)}))
+    elif cmd == 'check':
+        sys.exit(0 if check_pin(user, read_stdin()) else 1)
+    elif cmd == 'set':
+        try:
+            req = json.loads(read_stdin())
+            password, pin = str(req['password']), str(req['pin'])
+        except (ValueError, KeyError, TypeError):
+            fail('Bad request')
+        if not is_pin(pin):
+            fail('A PIN is 4 to 12 digits')
+        if not check_password(user, password):
+            fail('Wrong password', 3)
+        salt = secrets.token_bytes(16)
+        with store_lock():
+            save(user, {'v': 1, 'salt': salt.hex(), 'hash': kdf(pin, salt).hex(), 'fails': 0})
+    elif cmd == 'remove':
+        if not check_password(user, read_stdin()):
+            fail('Wrong password', 3)
+        with store_lock():
+            try:
+                os.remove(record_path(user))
+            except FileNotFoundError:
+                pass
+    elif cmd == 'reset':
+        if not check_password(user, read_stdin()):
+            fail('Wrong password', 3)
+        reset_fails(user)
+    else:
+        fail('Unknown command')
+
+
+main()

@@ -1,0 +1,160 @@
+diff --git a/meson.build b/meson.build
+index e2cfba1..14fa60a 100644
+--- a/meson.build
++++ b/meson.build
+@@ -40,6 +40,7 @@ endif
+ wlroots        = dependency('wlroots-0.20', fallback: ['wlroots', 'wlroots'])
+ wayland_server = dependency('wayland-server')
+ xkbcommon      = dependency('xkbcommon')
++libinput       = dependency('libinput')
+ math           = cc.find_library('m')
+ 
+ have_xwayland = wlroots.get_variable(pkgconfig: 'have_xwayland', internal: 'have_xwayland') == 'true'
+@@ -113,6 +114,7 @@ executable(
+     wayland_server,
+     wlroots,
+     xkbcommon,
++    libinput,
+     math,
+   ],
+   install: true,
+diff --git a/output.c b/output.c
+index 9f2a708..018f653 100644
+--- a/output.c
++++ b/output.c
+@@ -181,6 +181,9 @@ handle_output_layout_change(struct wl_listener *listener, void *data)
+ 
+ 	view_position_all(server);
+ 	update_output_manager_config(server);
++	if (server->seat) {
++		seat_map_touch_devices(server->seat);
++	}
+ }
+ 
+ static bool
+diff --git a/seat.c b/seat.c
+index 5f659a4..bbfd3e9 100644
+--- a/seat.c
++++ b/seat.c
+@@ -11,11 +11,13 @@
+ #include "config.h"
+ 
+ #include <assert.h>
++#include <libinput.h>
+ #include <linux/input-event-codes.h>
+ #include <stdlib.h>
+ #include <string.h>
+ #include <wayland-server-core.h>
+ #include <wlr/backend.h>
++#include <wlr/backend/libinput.h>
+ #include <wlr/backend/multi.h>
+ #include <wlr/backend/session.h>
+ #include <wlr/types/wlr_cursor.h>
+@@ -28,6 +30,7 @@
+ #include <wlr/types/wlr_seat.h>
+ #include <wlr/types/wlr_touch.h>
+ #include <wlr/types/wlr_virtual_keyboard_v1.h>
++#include <wlr/util/box.h>
+ #include <wlr/types/wlr_virtual_pointer_v1.h>
+ #include <wlr/types/wlr_xcursor_manager.h>
+ #include <wlr/util/log.h>
+@@ -155,6 +158,55 @@ map_input_device_to_output(struct cg_seat *seat, struct wlr_input_device *device
+ 	wlr_log(WLR_INFO, "Couldn't map input device %s to an output\n", device->name);
+ }
+ 
++/* The output a touchscreen belongs to: udev's WL_OUTPUT, which wlroots doesn't pass on for libinput devices. */
++static const char *
++touch_output_name(struct wlr_touch *wlr_touch)
++{
++	if (wlr_touch->output_name) {
++		return wlr_touch->output_name;
++	}
++	if (wlr_input_device_is_libinput(&wlr_touch->base)) {
++		return libinput_device_get_output_name(wlr_libinput_get_device_handle(&wlr_touch->base));
++	}
++	return NULL;
++}
++
++/* Touchscreens report positions in their panel's own orientation: turn them with the output they're on (a panel mounted
++ * upside down, like the Yoga Book 9's top one, or one rotated in the display settings). x and y are 0..1. */
++static void
++touch_to_output_orientation(struct cg_seat *seat, struct wlr_touch *wlr_touch, double *x, double *y)
++{
++	const char *name = touch_output_name(wlr_touch);
++	if (!name) {
++		return;
++	}
++
++	struct cg_output *output;
++	wl_list_for_each (output, &seat->server->outputs, link) {
++		if (strcmp(name, output->wlr_output->name) == 0) {
++			struct wlr_fbox point = {.x = *x, .y = *y}, turned;
++			wlr_fbox_transform(&turned, &point, output->wlr_output->transform, 1, 1);
++			*x = turned.x;
++			*y = turned.y;
++			return;
++		}
++	}
++}
++
++/* Touchscreens can appear before their outputs (at startup) and outputs come and go, so map them again on every
++ * layout change. */
++void
++seat_map_touch_devices(struct cg_seat *seat)
++{
++	struct cg_touch *touch;
++	wl_list_for_each (touch, &seat->touch, link) {
++		const char *name = touch_output_name(touch->touch);
++		if (name) {
++			map_input_device_to_output(seat, &touch->touch->base, name);
++		}
++	}
++}
++
+ static void
+ handle_touch_destroy(struct wl_listener *listener, void *data)
+ {
+@@ -186,7 +238,7 @@ handle_new_touch(struct cg_seat *seat, struct wlr_touch *wlr_touch)
+ 	touch->destroy.notify = handle_touch_destroy;
+ 	wl_signal_add(&wlr_touch->base.events.destroy, &touch->destroy);
+ 
+-	map_input_device_to_output(seat, &wlr_touch->base, wlr_touch->output_name);
++	map_input_device_to_output(seat, &wlr_touch->base, touch_output_name(wlr_touch));
+ }
+ 
+ static void
+@@ -503,8 +555,10 @@ handle_touch_down(struct wl_listener *listener, void *data)
+ 	struct cg_seat *seat = wl_container_of(listener, seat, touch_down);
+ 	struct wlr_touch_down_event *event = data;
+ 
++	double x = event->x, y = event->y;
++	touch_to_output_orientation(seat, event->touch, &x, &y);
+ 	double lx, ly;
+-	wlr_cursor_absolute_to_layout_coords(seat->cursor, &event->touch->base, event->x, event->y, &lx, &ly);
++	wlr_cursor_absolute_to_layout_coords(seat->cursor, &event->touch->base, x, y, &lx, &ly);
+ 
+ 	double sx, sy;
+ 	struct wlr_surface *surface;
+@@ -554,8 +608,10 @@ handle_touch_motion(struct wl_listener *listener, void *data)
+ 		return;
+ 	}
+ 
++	double x = event->x, y = event->y;
++	touch_to_output_orientation(seat, event->touch, &x, &y);
+ 	double lx, ly;
+-	wlr_cursor_absolute_to_layout_coords(seat->cursor, &event->touch->base, event->x, event->y, &lx, &ly);
++	wlr_cursor_absolute_to_layout_coords(seat->cursor, &event->touch->base, x, y, &lx, &ly);
+ 
+ 	double sx, sy;
+ 	struct wlr_surface *surface;
+diff --git a/seat.h b/seat.h
+index 4b7bfda..eff2d37 100644
+--- a/seat.h
++++ b/seat.h
+@@ -92,5 +92,6 @@ void seat_destroy(struct cg_seat *seat);
+ struct cg_view *seat_get_focus(struct cg_seat *seat);
+ void seat_set_focus(struct cg_seat *seat, struct cg_view *view);
+ void seat_center_cursor(struct cg_seat *seat);
++void seat_map_touch_devices(struct cg_seat *seat);
+ 
+ #endif

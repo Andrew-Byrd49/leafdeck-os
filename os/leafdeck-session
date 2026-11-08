@@ -1,0 +1,127 @@
+#!/bin/sh
+# Leafdeck OS session: Leafdeck is the whole screen. cage is a tiny Wayland compositor that runs one app full screen.
+# Inside it, this script runs again with --loop and starts Leafdeck over and over:
+#   exit 0  (Sign out)          -> the session ends and the login screen comes back
+#   exit 75 (Restart Leafdeck)  -> Leafdeck starts again, still signed in, with ~/.config/leafdeck-session.env reread
+#   exit 76 (Safe mode)         -> Leafdeck starts again in safe mode (below)
+#   anything else (a crash)     -> Leafdeck starts again; three crashes right after starting switch to safe mode
+#
+# Safe mode (also `leafdeck-session --safe`, which the sign-in screen's Safe mode button asks for): the Leafdeck that
+# ships with the OS, with none of the per-user settings that can keep it from starting: ~/.config/leafdeck-session.env
+# (a development tree, extra flags, compositor variables) is left unread. In the app, LEAFDECK_SAFE=1 skips saved
+# display arrangements and window layouts, and opens Claude with what went wrong (electron/safemode.cjs). "Try Leafdeck
+# now" there is exit 75: back to a normal start. If safe mode itself crashes three times, the session ends and the
+# sign-in screen says so (the marker in /run/leafdeck/failed, read by electron/greeter.cjs).
+ENV_FILE="$HOME/.config/leafdeck-session.env"
+FAILED_DIR=/run/leafdeck/failed
+
+# Leafdeck's output goes to the journal (journalctl -t leafdeck-session). A login manager that already does this (GDM)
+# sets JOURNAL_STREAM; a text sign-in (greetd) doesn't.
+if [ -z "$JOURNAL_STREAM" ] && command -v systemd-cat >/dev/null; then exec systemd-cat -t leafdeck-session -- "$0" "$@"; fi
+
+safe=0
+for arg in "$@"; do [ "$arg" = "--safe" ] && safe=1; done
+
+# The sign-in screen's note about the last session: "crashed" (Leafdeck kept crashing; safe mode took over) or
+# "safe-failed" (safe mode kept crashing too). Cleared when Leafdeck ends normally. Only this account can write its
+# own file (the folder is sticky, like /tmp), and the sign-in screen checks who wrote it.
+mark() {
+  [ -d "$FAILED_DIR" ] || return 0
+  if [ -z "$1" ]; then rm -f "$FAILED_DIR/$(id -un)" 2>/dev/null; else printf '%s %s %s\n' "$1" "$2" "$(date +%s)" > "$FAILED_DIR/$(id -un)" 2>/dev/null; fi
+  return 0
+}
+
+if [ "$1" = "--loop" ]; then
+  # systemd and D-Bus learn the session's display, so what they start (portals, apps) can show windows; the session
+  # target starts what belongs to a graphical session and stops it again at sign-out.
+  systemctl --user import-environment WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE 2>/dev/null
+  dbus-update-activation-environment --systemd WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE 2>/dev/null
+  systemctl --user start leafdeck-session.target 2>/dev/null
+  trap 'systemctl --user stop leafdeck-session.target 2>/dev/null' EXIT
+  # Back to the kernel's default scheduler slice (cage below has a short one; this loop would pass it on to Leafdeck and
+  # to the programs it opens). Leafdeck sets its own threads' slice itself (electron/ossched.cjs).
+  chrt -o -T 0 -p 0 $$ 2>/dev/null || true
+  # Screen mode (for example LEAFDECK_SCREEN_MODE=1440x900); real hardware uses the display's preferred mode.
+  if [ -n "$LEAFDECK_SCREEN_MODE" ]; then
+    for o in $(wlr-randr 2>/dev/null | grep -E "^[A-Za-z]" | cut -d" " -f1); do wlr-randr --output "$o" --mode "$LEAFDECK_SCREEN_MODE" 2>/dev/null; done
+  fi
+  quick=0
+  reason=""; last_code=""
+  [ "$safe" -eq 1 ] && reason=signin
+  while :; do
+    # Per-user settings (see os/README.md), exported to Leafdeck. Reread on every start, so Restart Leafdeck applies them.
+    # Not in safe mode: they may be what's wrong.
+    unset LEAFDECK_DEV_TREE LEAFDECK_EXTRA_FLAGS LEAFDECK_URL LEAFDECK_SCREEN LEAFDECK_SCREEN_SCALE
+    if [ "$safe" -eq 0 ] && [ -f "$ENV_FILE" ]; then set -a; . "$ENV_FILE"; set +a; fi
+    # The app: a source checkout in development (changes show up after Restart Leafdeck), otherwise the one Leafdeck OS
+    # ships (/usr/lib/leafdeck), or the Leafdeck package on another Fedora (/opt/Leafdeck).
+    app=/usr/lib/leafdeck/leafdeck app_args=""
+    [ -x "$app" ] || app=/opt/Leafdeck/leafdeck
+    if [ -n "$LEAFDECK_DEV_TREE" ] && [ -d "$LEAFDECK_DEV_TREE" ]; then
+      app="$LEAFDECK_DEV_TREE/node_modules/electron/dist/electron" app_args="$LEAFDECK_DEV_TREE"
+      # castlabs' Electron with Widevine (streaming sites' DRM), when os/electron-wv.sh has put it there.
+      [ -x "$LEAFDECK_DEV_TREE/os/electron-wv/electron" ] && app="$LEAFDECK_DEV_TREE/os/electron-wv/electron"
+    fi
+    # Secrets (saved passwords, cards, tokens): the GNOME keyring, when signing in with the password unlocked it
+    # (pam_gnome_keyring). After a PIN sign-in or auto-login it stays locked, and asking it would put GNOME's unlock
+    # prompt on the screen, so Leafdeck gets the basic store, where secure storage is unavailable and nothing secret is
+    # saved. Leafdeck OS will get its own secret store tied to disk encryption.
+    store=basic
+    busctl --user get-property org.freedesktop.secrets /org/freedesktop/secrets/aliases/default \
+      org.freedesktop.Secret.Collection Locked 2>/dev/null | grep -qx 'b false' && store=gnome-libsecret
+    started=$(date +%s)
+    vm_flags=""
+    [ -n "$LEAFDECK_IN_VM" ] && vm_flags="--disable-gpu"
+    if [ "$safe" -eq 1 ]; then
+      export LEAFDECK_SAFE=1 LEAFDECK_SAFE_REASON="$reason" LEAFDECK_SAFE_EXIT="$last_code"
+    else
+      unset LEAFDECK_SAFE LEAFDECK_SAFE_REASON LEAFDECK_SAFE_EXIT
+    fi
+    # Chromium's sandbox stays on: it confines each site's renderer with user namespaces and seccomp (no setuid helper).
+    $app $app_args --ozone-platform=wayland --password-store=$store $vm_flags $LEAFDECK_EXTRA_FLAGS
+    code=$?
+    [ "$code" -eq 0 ] && { mark; exit 0; }
+    [ "$code" -eq 75 ] && { mark; quick=0; safe=0; reason=""; last_code=""; continue; }
+    [ "$code" -eq 76 ] && { quick=0; safe=1; reason=asked; last_code=""; continue; }
+    if [ $(( $(date +%s) - started )) -lt 30 ]; then quick=$((quick + 1)); else quick=0; fi
+    if [ "$quick" -ge 3 ]; then
+      # Three crashes in a row right after starting. Normal Leafdeck: safe mode takes over, and the sign-in screen is
+      # told in case the session ends. Safe mode too: give up; the sign-in screen says so.
+      if [ "$safe" -eq 0 ]; then
+        echo "Leafdeck crashed three times right after starting (exit $code); starting in safe mode." >&2
+        mark crashed "$code"
+        quick=0; safe=1; reason=crashed; last_code="$code"
+        continue
+      fi
+      echo "Leafdeck crashed three times in safe mode too (exit $code); ending the session." >&2
+      mark safe-failed "$code"
+      exit 1
+    fi
+    sleep 1
+  done
+fi
+
+export XDG_SESSION_TYPE=wayland
+export XDG_CURRENT_DESKTOP=Leafdeck
+export LEAFDECK_SESSION=1
+export ELECTRON_OZONE_PLATFORM_HINT=wayland
+# GTK programs ask through the desktop portal, so their Open, Save and Print are Leafdeck's (GTK 3, then GTK 4).
+export GTK_USE_PORTAL=1 GDK_DEBUG=portals
+# In a virtual machine the compositor and Leafdeck render in software: virtual GPUs (VirtualBox's above all) break
+# wlroots buffer sharing. Real hardware keeps GPU rendering.
+if systemd-detect-virt --vm --quiet; then
+  export WLR_RENDERER=pixman WLR_NO_HARDWARE_CURSORS=1 LEAFDECK_IN_VM=1
+fi
+# The compositor's settings come from the env file too (LEAFDECK_TEST_APP, WLR_* variables). Not in safe mode.
+if [ "$safe" -eq 0 ] && [ -f "$ENV_FILE" ]; then set -a; . "$ENV_FILE"; set +a; fi
+# Scheduler: cage gets a 0.5 ms slice in place of the kernel's 2.8 ms, so when it wakes to put a frame on the screens
+# it preempts a busy thread (a build, a Claude session) within half a millisecond. Measured on the Yoga Book 9i with
+# three screens and every CPU thread busy: 60 fps with no late frame, against 7-43 late frames and 33-100 ms stalls
+# without. The session's CPU weight is os/leafdeck-session-scope.conf. chrt before util-linux 2.41 can't set a slice;
+# then nothing changes.
+chrt -o -T 500000 -p 0 $$ 2>/dev/null || true
+# Diagnostics: run another app in the same session (for example LEAFDECK_TEST_APP=gnome-text-editor).
+if [ "$safe" -eq 0 ] && [ -n "$LEAFDECK_TEST_APP" ]; then exec cage -- $LEAFDECK_TEST_APP; fi
+
+if [ "$safe" -eq 1 ]; then exec cage -- "$0" --loop --safe; fi
+exec cage -- "$0" --loop

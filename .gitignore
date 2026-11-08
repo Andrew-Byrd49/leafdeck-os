@@ -1,0 +1,19 @@
+node_modules/
+.wrangler/
+.dev.vars
+dist/
+.cloudflare.env
+
+# Logs and editor settings
+*.log
+.vscode/
+
+# Leafdeck OS image builds (os/image/build.sh)
+os/image/.build/
+os/image/out/
+
+# Python bytecode (the helpers in electron/)
+__pycache__/
+
+# castlabs Electron with Widevine for Leafdeck OS (os/electron-wv.sh)
+os/electron-wv/

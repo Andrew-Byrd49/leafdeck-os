@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Leafdeck Rescue</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="/css/rescue.css" />
+</head>
+<body>
+  <main class="rs">
+    <h1 id="title">Leafdeck isn’t responding</h1>
+    <p class="rs-sub" id="sub">You can end a page that’s stuck, reload the desktop, or restart.</p>
+    <section class="rs-card">
+      <div class="rs-head"><span>Running in Leafdeck</span><span>CPU</span><span>Memory</span><span></span></div>
+      <div class="rs-list" id="list"><div class="rs-empty">Looking…</div></div>
+    </section>
+    <div class="rs-actions">
+      <button type="button" data-act="reload-desktop">Reload the desktop</button>
+      <button type="button" data-act="restart-leafdeck">Restart Leafdeck</button>
+      <button type="button" data-act="safe-mode" title="Leafdeck with its default settings, and Claude to help fix what’s wrong">Restart into safe mode</button>
+      <button type="button" data-act="restart">Restart the computer</button>
+      <button type="button" data-act="shutdown">Shut down</button>
+    </div>
+    <button type="button" class="rs-back" data-act="close">Back to Leafdeck <kbd>Esc</kbd></button>
+    <div class="rs-msg" id="msg" role="status" aria-live="polite"></div>
+  </main>
+  <script src="/js/rescue.js"></script>
+</body>
+</html>

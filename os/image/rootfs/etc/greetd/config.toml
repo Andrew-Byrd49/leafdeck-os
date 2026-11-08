@@ -1,0 +1,8 @@
+# Leafdeck OS sign-in (greetd, a small login daemon): Leafdeck's sign-in screen (/usr/libexec/leafdeck/leafdeck-greeter),
+# which falls back to a text sign-in if it can't start. Signing in starts the Leafdeck session.
+[terminal]
+vt = 1
+
+[default_session]
+command = "/usr/libexec/leafdeck/leafdeck-greeter"
+user = "greetd"

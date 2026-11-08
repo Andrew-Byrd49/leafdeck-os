@@ -1,0 +1,40 @@
+#!/bin/bash
+# Leafdeck OS first-time setup: the computer's account and name. A text version on the first console for now;
+# Leafdeck's graphical setup replaces it (os/ARCHITECTURE.md). Runs once, before the first sign-in.
+set -u
+done_mark() { mkdir -p /var/lib/leafdeck && touch /var/lib/leafdeck/setup-done; }
+# Prompts go to the screen directly (read -p writes them to stderr, and only when it sees a terminal).
+ask() { printf '  %s' "$1"; IFS= read -r "$2"; }
+ask_secret() { printf '  %s' "$1"; IFS= read -rs "$2"; echo; }
+
+# Installed with an account already: nothing to do.
+if getent passwd | awk -F: '$3 >= 1000 && $3 < 60000 { found = 1 } END { exit !found }'; then
+  done_mark
+  exit 0
+fi
+
+printf '\033[H\033[2J'
+printf '\n  Welcome to Leafdeck OS\n\n  Let’s set up your account.\n\n'
+ask "Your name: " full
+while :; do
+  ask "Account name (lowercase, like jane): " user
+  if [[ ! $user =~ ^[a-z_][a-z0-9_-]{0,31}$ ]]; then echo "  Use lowercase letters, numbers, - or _, starting with a letter."
+  elif getent passwd "$user" >/dev/null; then echo "  That name is taken by the system. Pick another."
+  else break; fi
+done
+while :; do
+  ask_secret "Password: " pw1
+  ask_secret "Password again: " pw2
+  if [ -z "$pw1" ]; then echo "  The password can’t be empty."
+  elif [ "$pw1" != "$pw2" ]; then echo "  The passwords didn’t match. Try again."
+  else break; fi
+done
+ask "Computer name [leafdeck]: " host
+host=$(printf '%s' "${host:-leafdeck}" | tr -cs 'A-Za-z0-9-' '-' | sed 's/^-*//; s/-*$//' | cut -c1-63)
+
+useradd -m -c "$full" -G wheel "$user" 2>/dev/null || { echo "  Couldn’t create the account."; sleep 5; exit 1; }
+printf '%s:%s\n' "$user" "$pw1" | chpasswd
+hostnamectl set-hostname "${host:-leafdeck}" 2>/dev/null || printf '%s\n' "${host:-leafdeck}" > /etc/hostname
+done_mark
+printf '\n  All set. Sign in with %s and your password.\n\n' "$user"
+sleep 2

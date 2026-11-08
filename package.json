@@ -1,0 +1,105 @@
+{
+  "name": "leafdeck",
+  "productName": "Leafdeck",
+  "version": "1.17.0",
+  "description": "Business & nonprofit desktop",
+  "private": true,
+  "license": "PolyForm-Noncommercial-1.0.0",
+  "type": "module",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "dev": "wrangler d1 migrations apply DB --local && wrangler dev",
+    "deploy": "node scripts/cf-env.mjs wrangler d1 migrations apply DB --remote && node scripts/cf-env.mjs wrangler deploy",
+    "db:create": "wrangler d1 create leafdeck-db",
+    "app": "electron .",
+    "app:build:linux": "electron-builder --linux"
+  },
+  "build": {
+    "appId": "com.carydigitaldesign.leafdeck",
+    "productName": "Leafdeck",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "electron/**/*",
+      "public/**/*",
+      "src/**/*",
+      "migrations/**/*",
+      "package.json"
+    ],
+    "asar": true,
+    "electronFuses": {
+      "runAsNode": false,
+      "enableCookieEncryption": true,
+      "enableNodeOptionsEnvironmentVariable": false,
+      "enableNodeCliInspectArguments": false,
+      "enableEmbeddedAsarIntegrityValidation": true,
+      "onlyLoadAppFromAsar": true,
+      "grantFileProtocolExtraPrivileges": false
+    },
+    "publish": null,
+    "linux": {
+      "target": [
+        "AppImage",
+        "rpm"
+      ],
+      "icon": "electron/icon.png",
+      "category": "Network",
+      "artifactName": "Leafdeck-${version}-${arch}.${ext}",
+      "desktop": {
+        "entry": {
+          "Name": "Leafdeck",
+          "Comment": "The browser that works like a desktop",
+          "StartupWMClass": "Leafdeck",
+          "MimeType": "x-scheme-handler/http;x-scheme-handler/https;x-scheme-handler/mailto;text/html"
+        }
+      }
+    },
+    "rpm": {
+      "depends": [
+        "gtk3",
+        "libnotify",
+        "nss",
+        "libXScrnSaver",
+        "libXtst",
+        "xdg-utils",
+        "at-spi2-core",
+        "libdrm",
+        "mesa-libgbm",
+        "alsa-lib"
+      ]
+    },
+    "asarUnpack": [
+      "electron/pty-helper.py",
+      "electron/notify-helper.py",
+      "electron/desktop-helper.py",
+      "electron/leafdeckd.cjs",
+      "electron/leafdeckd-client.cjs",
+      "electron/terminal.cjs",
+      "electron/chathost.cjs",
+      "electron/osnotify.cjs",
+      "electron/appdisplay.sh"
+    ]
+  },
+  "devDependencies": {
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
+    "electron": "^44.7.1",
+    "electron-builder": "^26.15.3",
+    "qrcode-generator": "^2.0.4",
+    "sharp": "^0.34.2",
+    "wrangler": "^4.40.0"
+  },
+  "dependencies": {
+    "@ghostery/adblocker-electron": "^2.20.1",
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "@xterm/addon-webgl": "^0.19.0",
+    "electron-updater": "^6.8.9",
+    "zod": "^4.6.7"
+  },
+  "homepage": "https://getleafdeck.com",
+  "author": {
+    "name": "Cary Digital Design",
+    "email": "102317491+Andrew-Byrd49@users.noreply.github.com"
+  }
+}

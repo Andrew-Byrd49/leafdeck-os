@@ -1,0 +1,16 @@
+#!/bin/sh
+# Leafdeck OS: start Windows on the next restart only, by setting the firmware's one-time "boot next" entry.
+# Runs as root through a sudo rule that os/setup-fedora.sh installs, so Leafdeck's Restart into Windows needs no
+# password and no keyboard at the startup menu (where a Bluetooth keyboard doesn't work yet).
+#   leafdeck-boot-windows --check   exit 0 if Windows Boot Manager is a startup choice on this computer
+#   leafdeck-boot-windows           make the next restart start Windows (once)
+set -eu
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+num=$(efibootmgr 2>/dev/null | sed -n 's/^Boot\([0-9A-Fa-f]\{4\}\)\*\{0,1\}[[:space:]]*Windows Boot Manager.*/\1/p' | head -n 1)
+if [ -z "$num" ]; then
+  echo "Windows Boot Manager isn't a startup choice on this computer" >&2
+  exit 1
+fi
+[ "${1:-}" = "--check" ] && exit 0
+efibootmgr --bootnext "$num" >/dev/null
+echo "The next restart starts Windows (Boot$num)."

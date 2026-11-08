@@ -1,0 +1,6 @@
+[Desktop Entry]
+Name=Leafdeck
+Comment=Leafdeck OS: the browser that is the desktop
+Exec=/usr/local/bin/leafdeck-session
+Type=Application
+DesktopNames=Leafdeck

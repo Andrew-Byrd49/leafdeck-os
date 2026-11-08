@@ -1,0 +1,223 @@
+/* ---------------- Graphic Designer (public/js/graphic/) ----------------
+   Inside the Designer window, so Designer's colors (--dz-*) and panel styles (.dz-*, .dzl-*, .dzi-*) apply; this adds the
+   canvas, the tool palette, the overlay and what's only here. Selection is Illustrator's blue; smart guides magenta. */
+
+.win[data-app='designer'] { --gx-sel: #0d99ff; --gx-guide: #ff2fb4; }
+
+/* ----- home ----- */
+.dzh-modes { display: inline-flex; gap: 2px; padding: 3px; margin-bottom: 22px; border-radius: 10px; background: var(--field); border: 1px solid var(--line); }
+.dzh-modes button { display: inline-flex; align-items: center; gap: 7px; height: 30px; padding: 0 14px; border: 0; border-radius: 7px; background: none; color: var(--text-2); font: inherit; font-size: 12.5px; font-weight: 600; }
+.dzh-modes button:hover { color: var(--text); }
+.dzh-modes button.on { background: var(--dz-panel); color: var(--text); box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12); }
+.dzh-modes button.on .dg { color: var(--dz-blue); }
+.gx-sizes { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); margin-top: 0; }
+.gx-sizes .dzh-tile span.gx-size-art { width: 44px; height: 44px; background: none !important; display: grid; place-items: center; }
+.gx-size-art i { display: block; border: 1.5px solid var(--dz-blue); border-radius: 2px; background: light-dark(#fff, #2c2c2c); box-sizing: border-box; }
+.gx-thumb { background: repeating-conic-gradient(light-dark(#ececec, #262626) 0 25%, light-dark(#f7f7f7, #2e2e2e) 0 50%) 0 0 / 14px 14px; }
+.gx-badge { font-size: 10.5px; font-weight: 600; color: var(--dz-purple); background: color-mix(in srgb, var(--dz-purple) 12%, transparent); border-radius: 5px; padding: 2px 7px; margin-left: 4px; }
+
+/* ----- canvas ----- */
+.gx-viewport { position: absolute; inset: 0; overflow: hidden; outline: none; background: var(--dz-canvas); touch-action: none; cursor: default; }
+.gx-svg, .gx-overlay { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.gx-overlay { pointer-events: none; }
+.gx-overlay [data-a], .gx-overlay [data-h], .gx-overlay [data-box], .gx-overlay [data-rot], .gx-overlay [data-guide], .gx-overlay [data-grad], .gx-overlay [data-corner], .gx-overlay [data-cw] { pointer-events: all; }
+.gx-board { filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.22)); }
+.gx-board.clear { fill: url(#none); }
+.gx-svg .gx-board.clear { fill: #fff; opacity: 1; }
+.gx-art, .gx-art * { user-select: none; -webkit-user-select: none; }
+.gx-hit { pointer-events: stroke; }
+rect.gx-hit { pointer-events: all; }
+/* Outline view: shapes as hairlines, no paint. */
+.gx-svg.outline .gx-art * { fill: none !important; stroke: light-dark(#222, #ddd) !important; stroke-width: calc(1px / var(--z, 1)) !important; filter: none !important; opacity: 1 !important; }
+.gx-svg.outline .gx-art image { opacity: 0.25 !important; }
+.gx-svg.outline .gx-art .gx-hit { stroke: transparent !important; stroke-width: calc(8px / var(--z, 1)) !important; }
+.gx-svg.outline .gx-art text { fill: light-dark(#222, #ddd) !important; stroke: none !important; }
+
+.gx-viewport[data-tool='pen'], .gx-viewport[data-tool='pencil'], .gx-viewport[data-tool='rect'], .gx-viewport[data-tool='ellipse'], .gx-viewport[data-tool='polygon'], .gx-viewport[data-tool='star'], .gx-viewport[data-tool='line'], .gx-viewport[data-tool='artboard'] { cursor: crosshair; }
+.gx-viewport[data-tool='text'] { cursor: text; }
+.gx-viewport[data-tool='gradient'], .gx-viewport[data-tool='scissors'] { cursor: crosshair; }
+.gx-viewport[data-tool='zoom'] { cursor: zoom-in; }
+.gx-viewport[data-tool='eyedropper'] { cursor: copy; }
+.gx-viewport[data-tool='hand'], .gx-viewport.space { cursor: grab; }
+.gx-viewport.panning { cursor: grabbing; }
+.gx-viewport[data-pen='add'] { cursor: copy; }
+.gx-viewport[data-pen='remove'] { cursor: not-allowed; }
+.gx-viewport[data-pen='close'], .gx-viewport[data-pen='continue'] { cursor: cell; }
+.gx-viewport[data-tool='direct'] .gx-ov-anchor, .gx-viewport[data-tool='direct'] .gx-ov-handle { cursor: move; }
+
+.gx-ov-hover { fill: none; stroke: var(--gx-sel); stroke-width: 2; }
+.gx-ov-sel { fill: none; stroke: var(--gx-sel); stroke-width: 1; }
+.gx-ov-sel.thin { stroke-opacity: 0.55; }
+.gx-ov-box { fill: none; stroke: var(--gx-sel); stroke-width: 1; }
+.gx-ov-bh { fill: #fff; stroke: var(--gx-sel); stroke-width: 1; }
+.gx-ov-rot { fill: transparent; stroke: none; }
+.gx-ov-anchor { fill: #fff; stroke: var(--gx-sel); stroke-width: 1; }
+.gx-ov-anchor.on { fill: var(--gx-sel); }
+.gx-ov-hline { stroke: var(--gx-sel); stroke-width: 1; }
+.gx-ov-handle { fill: var(--gx-sel); stroke: #fff; stroke-width: 1; }
+.gx-ov-rubber { fill: none; stroke: var(--gx-sel); stroke-width: 1; stroke-dasharray: 3 3; }
+.gx-ov-pencil { fill: none; stroke-linecap: round; stroke-linejoin: round; opacity: 0.8; }
+.gx-ov-marquee { fill: color-mix(in srgb, var(--gx-sel) 8%, transparent); stroke: var(--gx-sel); stroke-width: 1; stroke-dasharray: 3 2; }
+.gx-ov-marquee.zoom { fill: none; stroke: light-dark(#333, #ccc); }
+.gx-ov-guide { stroke: var(--gx-guide); stroke-width: 1; }
+/* The document's guides (cyan, like Illustrator's), the grid, the Gradient tool's handles, corner handles, the scissors. */
+.gx-ov-dguide { stroke: #1cc3d6; stroke-width: 1; }
+.gx-ov-dguide.new { stroke-dasharray: 4 3; }
+.gx-ov-dguide-hit { stroke: transparent; stroke-width: 7; }
+.gx-grid-line { fill: none; stroke: light-dark(rgba(0, 0, 0, 0.09), rgba(255, 255, 255, 0.1)); stroke-width: 1; }
+.gx-grid-line.major { stroke: light-dark(rgba(0, 0, 0, 0.18), rgba(255, 255, 255, 0.2)); }
+.gx-ov-gline { fill: none; stroke: var(--gx-sel); stroke-width: 1.5; }
+.gx-ov-gline-hit { fill: none; stroke: transparent; stroke-width: 12; cursor: move; }
+.gx-ov-gend { fill: #fff; stroke: var(--gx-sel); stroke-width: 1.5; cursor: move; }
+.gx-ov-gstop { stroke: #fff; stroke-width: 1.5; cursor: ew-resize; filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.6)); }
+.gx-ov-corner { fill: #fff; stroke: var(--gx-sel); stroke-width: 1; cursor: nwse-resize; }
+.gx-ov-corner:hover { fill: var(--gx-sel); }
+.gx-ov-cw { fill: #fff; stroke: var(--gx-sel); stroke-width: 1.25; cursor: move; }
+.gx-ov-cw:hover { fill: var(--gx-sel); r: 4.5; }
+.gx-ov-region { fill: color-mix(in srgb, var(--gx-sel) 30%, transparent); stroke: var(--gx-sel); stroke-width: 1.5; }
+.gx-ov-region.on { fill: color-mix(in srgb, var(--gx-sel) 55%, transparent); }
+.gx-ov-region.erase { fill: rgba(242, 72, 34, 0.3); stroke: #f24822; }
+.gx-ov-region.erase.on { fill: rgba(242, 72, 34, 0.55); }
+.gx-viewport[data-tool='shapebuilder'] { cursor: copy; }
+.gx-ov-cut { fill: none; stroke: #f24822; stroke-width: 1.5; }
+.gx-ov-cut-x { stroke: #f24822; stroke-width: 1; }
+.gx-ov-tip rect { fill: var(--gx-sel); }
+.gx-ov-tip text { fill: #fff; font-size: 10.5px; font-weight: 500; text-anchor: middle; font-variant-numeric: tabular-nums; }
+
+.gx-labels { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+.gx-blabel { position: absolute; pointer-events: auto; font-size: 11px; line-height: 16px; color: light-dark(#6b6b6b, #a0a0a0); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: default; }
+.gx-blabel:hover, .gx-blabel.on { color: var(--gx-sel); }
+.gx-textedit { position: absolute; margin: 0; padding: 0; border: 0; outline: 1px solid var(--gx-sel); background: transparent; resize: none; overflow: hidden; caret-color: var(--gx-sel); z-index: 3; box-sizing: content-box; }
+
+/* ----- rulers (over the canvas's top and left edges) ----- */
+.gx-ruler { position: absolute; display: none; z-index: 5; color: light-dark(#5c5c5c, #a8a8a8); background: light-dark(#f4f4f4, #262626); border-color: light-dark(#c9c9c9, #454545); font-family: inherit; }
+.gx-ruler-h { left: 16px; top: 0; height: 16px; cursor: ns-resize; }
+.gx-ruler-v { left: 0; top: 16px; width: 16px; cursor: ew-resize; }
+.gx-ruler-corner { position: absolute; display: none; left: 0; top: 0; width: 16px; height: 16px; z-index: 5; box-sizing: border-box; border-right: 1px solid light-dark(#c9c9c9, #454545); border-bottom: 1px solid light-dark(#c9c9c9, #454545); background: light-dark(#f4f4f4, #262626); color: light-dark(#5c5c5c, #a8a8a8); font-size: 8px; font-weight: 600; line-height: 16px; text-align: center; cursor: pointer; user-select: none; }
+.gx-ruler-corner:hover { color: var(--gx-sel); }
+.gx-viewport.rulers .gx-ruler, .gx-viewport.rulers .gx-ruler-corner { display: block; }
+.gx-viewport.rulers .gx-labels { top: 16px; }
+
+/* ----- the context bar (over the canvas): where you are, the tool's options, what the keys do ----- */
+.gx .dz-center { flex-direction: column; }
+.gx .dz-canvas { flex: 1; min-height: 0; }
+.gx-ctxbar { height: 32px; flex-shrink: 0; display: flex; align-items: center; gap: 10px; padding: 0 12px 0 10px; background: var(--dz-panel); border-bottom: 1px solid var(--dz-line); font-size: 11.5px; color: var(--text-2); min-width: 0; }
+.gx-ctxbar .grow { flex: 1; }
+.gx-where { display: flex; align-items: center; gap: 2px; flex-shrink: 0; max-width: 40%; overflow: hidden; }
+.gx-where i { font-style: normal; color: var(--text-3); }
+.gx-crumb { height: 24px; padding: 0 7px; border: 0; border-radius: 6px; background: none; color: var(--text-2); font: inherit; font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 160px; }
+.gx-crumb:hover { background: var(--dz-field); color: var(--text); }
+.gx-crumb.on { color: var(--text); font-weight: 600; }
+.gx-opt { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; flex-shrink: 0; }
+.gx-opt input[type='number'] { width: 46px; height: 24px; border-radius: 5px; border: 1px solid transparent; background: var(--dz-field); color: var(--text); font: inherit; font-size: 11.5px; padding: 0 6px; }
+.gx-opt input:focus { border-color: var(--gx-sel); outline: none; }
+.gx-selinfo b { font-weight: 600; color: var(--text); }
+.gx-ctxseg button { height: 22px; }
+.gx-hintline { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-3); }
+
+/* ----- the tool palette (left edge of the canvas) ----- */
+.gx-palette { position: absolute; left: 10px; top: 42px; z-index: 4; display: flex; flex-direction: column; align-items: center; gap: 1px; padding: 4px; border-radius: 10px; background: var(--dz-panel); box-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.12), 0 2px 10px rgba(0, 0, 0, 0.12); max-height: calc(100% - 20px); overflow: auto; scrollbar-width: none; }
+.gx-palette button { width: 32px; height: 30px; border: 0; border-radius: 6px; background: none; color: var(--text); display: grid; place-items: center; padding: 0; flex-shrink: 0; }
+.gx-palette button:hover { background: var(--dz-field); }
+.gx-palette button.on { background: var(--gx-sel); color: #fff; }
+.gx-palette > i { width: 20px; height: 1px; background: var(--dz-line); margin: 3px 0; flex-shrink: 0; }
+.gx.rulers .gx-palette { left: 26px; top: 58px; }
+.gx.rulers .dz-drop-hint { top: 48px; left: 28px; }
+.gx-fs { position: relative; width: 32px; height: 32px; flex-shrink: 0; cursor: pointer; margin: 2px 0; }
+.gx-fs span { position: absolute; width: 18px; height: 18px; border-radius: 3px; box-sizing: border-box; background: linear-gradient(var(--c), var(--c)), repeating-conic-gradient(#ccc 0 25%, #fff 0 50%) 0 0 / 6px 6px; }
+.gx-fs-fill { left: 3px; top: 3px; box-shadow: 0 0 0 1px var(--dz-panel), 0 0 0 1.5px rgba(0, 0, 0, 0.25); }
+.gx-fs-stroke { right: 3px; bottom: 3px; }
+.gx-fs-stroke::after { content: ''; position: absolute; inset: 5px; background: var(--dz-panel); border-radius: 1px; }
+.gx-fs span.none { background: var(--dz-panel); box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.25); }
+.gx-fs span.none::before { content: ''; position: absolute; left: 50%; top: -2px; bottom: -2px; width: 1.5px; background: #f24822; transform: rotate(45deg); }
+
+/* ----- Layers / Artboards ----- */
+.gx .dz-left { padding: 0; }
+.gx-layers { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.gx-ltabs { height: 36px; display: flex; align-items: center; gap: 2px; padding: 0 8px; border-bottom: 1px solid var(--dz-line); flex-shrink: 0; }
+.gx-ltabs button[data-ltab] { height: 26px; padding: 0 9px; border: 0; border-radius: 6px; background: none; color: var(--text-2); font: inherit; font-size: 11.5px; font-weight: 600; }
+.gx-ltabs button[data-ltab].on { background: var(--dz-field); color: var(--text); }
+.gx-ltabs small { color: var(--text-3); font-weight: 500; margin-left: 3px; }
+.gx-ltabs .grow { flex: 1; }
+.gx-lbody { flex: 1; overflow: auto; padding: 6px 0 24px; }
+.gx-lchip { width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0; background: linear-gradient(var(--c), var(--c)), repeating-conic-gradient(#ccc 0 25%, #fff 0 50%) 0 0 / 4px 4px; box-shadow: inset 0 0 0 0.5px rgba(0, 0, 0, 0.25); }
+.dzl-row.scope { background: color-mix(in srgb, var(--gx-sel) 7%, transparent); }
+.gx-bnum { width: 18px; color: var(--text-3); font-variant-numeric: tabular-nums; text-align: right; margin-right: 4px; }
+.gx-bsize { color: var(--text-3); font-variant-numeric: tabular-nums; }
+
+/* ----- the toolbar's menus ----- */
+.gx-menus { display: inline-flex; gap: 2px; margin-left: 6px; }
+.gx-menu { padding: 0 8px; font-size: 11.5px; }
+
+/* ----- Properties ----- */
+.gx-props .dzi-head { min-height: 22px; }
+.dzi-num i.unit { font-size: 10px; }
+.gx-xform { display: flex; gap: 8px; align-items: stretch; }
+.gx-xform-f { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.gx-ref { display: grid; grid-template-columns: repeat(3, 1fr); width: 44px; height: 44px; flex-shrink: 0; align-self: flex-start; margin-top: 9px; background: var(--dz-field); border-radius: 5px; padding: 2px; box-sizing: border-box; }
+.gx-ref button { border: 0; background: none; padding: 0; display: grid; place-items: center; border-radius: 3px; }
+.gx-ref button i { width: 4px; height: 4px; border-radius: 50%; background: var(--text-3); }
+.gx-ref button:hover i { background: var(--gx-sel); }
+.gx-ref button.on i { width: 7px; height: 7px; border-radius: 2px; background: var(--gx-sel); }
+.gx-case { font-size: 11px; font-weight: 600; letter-spacing: -0.02em; }
+.gx-slider { display: flex; align-items: center; gap: 6px; height: 24px; font-size: 11px; color: var(--text-2); }
+.gx-slider > span { width: 64px; flex-shrink: 0; }
+.gx-slider input[type='range'] { flex: 1; min-width: 0; margin: 0; accent-color: var(--gx-sel); height: 14px; }
+.gx-slider .gx-slider-n { width: 38px; height: 22px; border-radius: 4px; border: 1px solid transparent; background: var(--dz-field); color: var(--text); font: inherit; font-size: 11px; text-align: right; padding: 0 4px; }
+.gx-slider .gx-slider-n:focus { border-color: var(--gx-sel); outline: none; }
+.gx-slider i { font-style: normal; color: var(--text-3); width: 12px; }
+.gx-props .dzi-head .dzi-icon { min-width: 26px; height: 26px; }
+.gx-muted { color: var(--text-3); font-size: 11.5px; }
+.gx-lab { color: var(--text-3); font-size: 11px; white-space: nowrap; flex-shrink: 0; }
+.gx-hint { margin: 2px 0 0; color: var(--text-3); font-size: 11px; line-height: 1.45; }
+.gx-hint kbd { font: inherit; background: var(--dz-field); border-radius: 4px; padding: 0 4px; }
+.gx-alignrow { display: flex; flex-wrap: wrap; gap: 0; margin: 0 -4px; }
+.gx-alignrow .dzi-icon:disabled { opacity: 0.35; }
+.gx-btnrow { display: flex; flex-wrap: wrap; gap: 6px; }
+.gx-btnrow .btn.small { height: 26px; padding: 0 10px; font-size: 11.5px; display: inline-flex; align-items: center; gap: 4px; }
+.gx-btnrow .dzi-select { flex: 1 1 100%; }
+.gx-check { display: flex; align-items: center; gap: 7px; font-size: 11.5px; color: var(--text-2); line-height: 1.4; }
+.gx-check input { margin: 0; accent-color: var(--gx-sel); }
+.dzi-num.narrow { flex: 0 0 82px; }
+.gx-kind { display: block; width: 14px; height: 14px; border-radius: 3px; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.2); }
+.gx-kind.solid { background: currentColor; }
+.gx-kind.linear { background: linear-gradient(90deg, currentColor, transparent); }
+.gx-kind.radial { background: radial-gradient(currentColor, transparent 75%); }
+.gx-grad { position: relative; height: 20px; margin: 4px 7px 8px; border-radius: 4px; cursor: copy; background: var(--g), repeating-conic-gradient(#ccc 0 25%, #fff 0 50%) 0 0 / 8px 8px; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.15); }
+.gx-stop { position: absolute; top: 50%; width: 14px; height: 24px; margin: -12px 0 0 -7px; padding: 0; border-radius: 4px; border: 2px solid #fff; background: var(--c); box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35), 0 1px 3px rgba(0, 0, 0, 0.3); cursor: ew-resize; }
+.gx-stop.on { box-shadow: 0 0 0 2px var(--gx-sel), 0 1px 3px rgba(0, 0, 0, 0.3); }
+.gx-fx { display: flex; flex-direction: column; gap: 6px; padding-bottom: 4px; }
+.gx-fx + .gx-fx { border-top: 1px solid var(--dz-line); padding-top: 6px; }
+.gx-fxname { font-size: 11.5px; font-weight: 500; }
+.gx-swatches { display: grid; grid-template-columns: repeat(auto-fill, 22px); gap: 5px; }
+.gx-sw { width: 22px; height: 22px; padding: 0; border: 0; border-radius: 4px; background: linear-gradient(var(--c), var(--c)), repeating-conic-gradient(#ccc 0 25%, #fff 0 50%) 0 0 / 8px 8px; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.15); }
+.gx-sw[style*='gradient'] { background: var(--c); }
+.gx-sw:hover { box-shadow: 0 0 0 2px var(--gx-sel); }
+.gx-sw.add { background: var(--dz-field); color: var(--text-2); display: grid; place-items: center; box-shadow: none; }
+
+/* ----- Export, Transform, Shortcuts sheets ----- */
+.gx-export, .gx-sheet { width: min(440px, 94%); }
+.gx-export h2, .gx-sheet h2 { margin: 0 0 14px; font-size: 16px; }
+.gx-export .dlg-text, .gx-sheet .dlg-text { display: flex; flex-direction: column; gap: 12px; }
+.gx-sheet .dzi-num { flex: 0 0 110px; }
+.gx-sheet .dzi-num.narrow { flex-basis: 70px; }
+.gx-sheet .dzi-num input { width: 100%; }
+.gx-sheet .gx-check { white-space: nowrap; }
+.gx-sheet .gx-muted { font-size: 11.5px; }
+.gx-sheet.gx-keys-sheet { width: min(760px, 96%); }
+.gx-keys-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 26px; }
+.gx-keys-grid section h3 { margin: 0 0 6px; font-size: 12px; font-weight: 600; }
+.gx-keys-grid dl { display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; margin: 0; font-size: 11.5px; }
+.gx-keys-grid dt { white-space: nowrap; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 10.5px; color: var(--text); }
+.gx-keys-grid dd { margin: 0; color: var(--text-2); }
+.gx-xrow { display: flex; align-items: center; gap: 12px; }
+.gx-xrow > span:first-child { width: 52px; color: var(--text-2); font-size: 12.5px; flex-shrink: 0; }
+.gx-xrow[hidden], .gx-check[hidden] { display: none; }
+.gx-xseg button { width: auto; min-width: 44px; padding: 0 10px; font: inherit; font-size: 12px; font-weight: 600; color: var(--text-2); }
+.gx-xseg button.on { color: var(--text); }
+.gx-xrow .dzi-select { height: 30px; font-size: 12.5px; }
+.gx-xnote { margin: 0; color: var(--text-3); font-size: 12px; }
+.gx-export.busy { opacity: 0.6; pointer-events: none; }
+.dzi-seg.words button { width: auto; padding: 0 8px; font: inherit; font-size: 11px; font-weight: 500; }
+.gx-props .dzi-sec:first-child { border-top: 0; }
+.gx-props { overflow-x: hidden; }

@@ -1,0 +1,82 @@
+/* Leafdeck OS lock screen (public/lock.html). Same tokens and glow language as the desktop (css/surface.css). */
+:root {
+  --accent: #34c77b;
+  --accent-soft: color-mix(in srgb, var(--accent) 22%, transparent);
+  --glow: color-mix(in srgb, var(--accent) 35%, transparent);
+  color-scheme: dark;
+  font-family: Inter, -apple-system, 'Segoe UI', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; overflow: hidden; background: #0b0f0d; color: #f2f2f5; user-select: none; }
+button, input { font: inherit; color: inherit; }
+
+.lk-wall { position: fixed; inset: -40px; background: #0b0f0d center / cover no-repeat; filter: blur(28px) brightness(0.55) saturate(1.2); transform: scale(1.05); }
+.lk-wall::after { content: ''; position: absolute; inset: 0; background: radial-gradient(60% 50% at 50% 40%, transparent, rgba(4, 8, 6, 0.6)); }
+
+.lk { position: relative; height: 100%; display: flex; flex-direction: column; align-items: center; padding-top: 12vh; }
+.lk-time { font-size: clamp(64px, 11vw, 132px); font-weight: 650; letter-spacing: -0.05em; line-height: 1; text-shadow: 0 4px 40px rgba(0, 0, 0, 0.35); font-variant-numeric: tabular-nums; }
+.lk-date { margin-top: 10px; font-size: 19px; font-weight: 500; color: rgba(235, 235, 245, 0.8); }
+
+.lk-card { margin-top: auto; margin-bottom: 16vh; display: flex; flex-direction: column; align-items: center; gap: 10px; }
+.lk-avatar { width: 76px; height: 76px; border-radius: 50%; display: grid; place-items: center; font-size: 32px; font-weight: 650;
+  background: linear-gradient(160deg, color-mix(in srgb, var(--accent) 75%, #fff), color-mix(in srgb, var(--accent) 70%, #000)); color: #07130c;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.4), 0 0 0 3px rgba(255, 255, 255, 0.12), 0 0 36px var(--glow); }
+.lk-name { font-size: 17px; font-weight: 600; margin-bottom: 6px; }
+.lk-field { position: relative; display: flex; align-items: center; width: 280px; height: 42px; padding: 0 4px 0 16px; border-radius: 999px;
+  background: rgba(20, 26, 22, 0.55); backdrop-filter: blur(18px); border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 8px 30px rgba(0, 0, 0, 0.3); transition: box-shadow 0.2s, border-color 0.2s; }
+.lk-field:focus-within { border-color: color-mix(in srgb, var(--accent) 70%, transparent); box-shadow: 0 0 0 4px var(--accent-soft), 0 0 30px var(--glow); }
+.lk-field input { flex: 1; min-width: 0; height: 100%; border: 0; outline: 0; background: none; font-size: 15px; letter-spacing: 0.08em; }
+.lk-field input::placeholder { letter-spacing: 0; color: rgba(235, 235, 245, 0.5); }
+.lk-go { width: 34px; height: 34px; flex-shrink: 0; border: 0; border-radius: 50%; display: grid; place-items: center; background: var(--accent); color: #07130c; box-shadow: 0 0 14px var(--glow); cursor: pointer; }
+.lk-go svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+.checking .lk-go { animation: pulse 0.9s ease-in-out infinite; }
+.lk-msg { min-height: 20px; font-size: 13px; color: rgba(255, 180, 174, 0.95); }
+.shake .lk-field { animation: shake 0.4s; }
+@keyframes shake { 20%, 60% { transform: translateX(-9px); } 40%, 80% { transform: translateX(9px); } }
+@keyframes pulse { 50% { opacity: 0.5; } }
+
+.lk-foot { position: fixed; right: 24px; bottom: 22px; display: flex; gap: 10px; }
+.lk-foot button { display: flex; align-items: center; gap: 7px; height: 34px; padding: 0 14px; border-radius: 999px; border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(20, 26, 22, 0.5); backdrop-filter: blur(14px); font-size: 13px; color: rgba(235, 235, 245, 0.85); cursor: pointer; }
+.lk-foot button:hover { background: rgba(40, 48, 44, 0.6); color: #fff; }
+.lk-foot button.armed { background: linear-gradient(180deg, #ff6a60, #e3352b); border-color: transparent; color: #fff; box-shadow: 0 0 16px rgba(255, 69, 58, 0.45); }
+.lk-foot svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+
+/* On-screen keyboard */
+.lk-kb { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); width: min(820px, calc(100vw - 24px)); padding: 10px; border-radius: 18px;
+  display: flex; flex-direction: column; gap: 8px; background: rgba(16, 21, 18, 0.72); backdrop-filter: blur(22px); border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 16px 50px rgba(0, 0, 0, 0.45); touch-action: manipulation; }
+.lk-kb[hidden] { display: none; }
+.kb-row { display: flex; gap: 6px; justify-content: center; }
+.kb-key { flex: 1 1 0; max-width: 76px; height: 52px; border: 0; border-radius: 10px; font-size: 20px; color: #f2f2f5; cursor: pointer;
+  background: rgba(255, 255, 255, 0.12); box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08); }
+.kb-key:active { background: rgba(255, 255, 255, 0.28); }
+.kb-shift, .kb-back, .kb-sym, .kb-more, .kb-abc { flex-grow: 1.5; max-width: 112px; font-size: 16px; background: rgba(255, 255, 255, 0.06); }
+.kb-shift.on { background: #f2f2f5; color: #0b0f0d; }
+.kb-space { flex-grow: 6; max-width: 440px; }
+.kb-enter { flex-grow: 2; max-width: 150px; font-size: 16px; font-weight: 600; background: var(--accent); color: #07130c; box-shadow: 0 0 14px var(--glow); }
+.kb .lk-card { margin-bottom: 300px; }
+.kb .lk { padding-top: 6vh; }
+.kb .lk-foot { top: 22px; bottom: auto; }
+.lk-foot button[aria-pressed='true'] { color: #fff; border-color: color-mix(in srgb, var(--accent) 60%, transparent); }
+
+/* Sign-in screen (electron/greeter.cjs): safe mode (os/leafdeck-session --safe), and a note about the last session. */
+.lk-note { max-width: 300px; margin: -4px 0 10px; font-size: 12.5px; line-height: 1.4; color: rgba(235, 235, 245, 0.75); text-align: center; }
+.lk-note[hidden] { display: none; }
+body.safe .lk-note { color: #ffd38a; }
+.lk-foot .lk-safe[aria-pressed='true'] { color: #ffd38a; border-color: rgba(255, 211, 138, 0.55); background: rgba(80, 60, 20, 0.5); }
+body.safe .lk-go { background: #f0b547; box-shadow: 0 0 14px rgba(240, 181, 71, 0.5); }
+
+/* Sign-in screen (electron/greeter.cjs): the accounts on this computer, when there's more than one. */
+.lk-users { position: fixed; left: 0; right: 0; bottom: 84px; display: flex; justify-content: center; gap: 10px; flex-wrap: wrap; padding: 0 16px; }
+.lk-user { display: flex; align-items: center; gap: 8px; padding: 6px 14px 6px 6px; border-radius: 999px; border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(20, 26, 22, 0.45); backdrop-filter: blur(14px); font-size: 13px; font-weight: 500; color: rgba(235, 235, 245, 0.85); cursor: pointer; }
+.lk-user.on { border-color: color-mix(in srgb, var(--accent) 70%, transparent); box-shadow: 0 0 0 3px var(--accent-soft); color: #fff; }
+.lk-user-av { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; font-size: 12px; font-weight: 650; color: #07130c;
+  background: linear-gradient(160deg, color-mix(in srgb, var(--accent) 75%, #fff), color-mix(in srgb, var(--accent) 70%, #000)); }
+.kb .lk-users { display: none; }
+/* Room for a message ("Wrong password") between the password field and the account row. */
+body.greeter:has(.lk-users) .lk-card { margin-bottom: calc(16vh + 36px); }
+

@@ -1,0 +1,16 @@
+# leafdeckd: Leafdeck OS's user services (terminals, notifications; electron/leafdeckd.cjs). Started with the Leafdeck
+# session and stopped at sign-out; Leafdeck itself can restart or crash without taking shells down with it.
+[Unit]
+Description=Leafdeck services
+PartOf=leafdeck-session.target
+
+[Service]
+ExecStart=/usr/bin/node-24 /usr/lib/leafdeck/resources/app.asar.unpacked/electron/leafdeckd.cjs
+Restart=on-failure
+RestartSec=1
+# What runs in the terminals (builds, encodes) yields to the Leafdeck session (weight 100) whenever they compete.
+CPUWeight=25
+IOWeight=25
+
+[Install]
+WantedBy=leafdeck-session.target

@@ -1,0 +1,101 @@
+#!/usr/bin/env python3
+"""Open web links, pictures, folders and files in Leafdeck: Leafdeck OS's web browser, image viewer and file manager for
+every other program (xdg-open, $BROWSER and desktop portals end up here: os/leafdeck-mimeapps.list makes it the
+system's browser, image viewer and file manager, os/leafdeck-browser.conf sets $BROWSER). `gh auth login`, `claude
+login` and other sign-in flows open their page as a Leafdeck window, instead of another browser covering the screen;
+pictures open in Image Viewer, web pages on this computer (.html) in the browser, folders in Files, and other files the way Files opens them (a preview, or their app).
+
+    leafdeck-open URL|PATH...
+
+Each goes to the running Leafdeck through leafdeckd (electron/leafdeckd.cjs). If Leafdeck can't be reached that way,
+Leafdeck is started with it; a Leafdeck that's already running takes it from there.
+"""
+import json
+import os
+import socket
+import subprocess
+import sys
+import urllib.parse
+
+PICTURE = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".avif", ".bmp", ".svg", ".ico")  # what Image Viewer shows
+
+
+def via_leafdeckd(method, params):
+    runtime = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
+    try:
+        s = socket.socket(socket.AF_UNIX)
+        s.settimeout(3)
+        s.connect(os.path.join(runtime, "leafdeck", "daemon.sock"))
+        s.sendall((json.dumps({"id": 1, "method": method, "params": params}) + "\n").encode())
+        buf = b""
+        while True:  # other clients' events may arrive first; wait for the answer to this request
+            chunk = s.recv(65536)
+            if not chunk:
+                return False
+            buf += chunk
+            *lines, buf = buf.split(b"\n")
+            for line in lines:
+                try:
+                    msg = json.loads(line)
+                except ValueError:
+                    continue
+                if msg.get("id") == 1:
+                    return "error" not in msg
+    except OSError:
+        return False
+    finally:
+        try:
+            s.close()
+        except Exception:
+            pass
+
+
+def start_leafdeck(arg):
+    """The installed Leafdeck, or the development checkout the session runs (~/.config/leafdeck-session.env)."""
+    tree = os.environ.get("LEAFDECK_DEV_TREE", "")
+    env_file = os.path.expanduser("~/.config/leafdeck-session.env")
+    if not tree and os.path.exists(env_file):
+        for line in open(env_file, encoding="utf-8"):
+            if line.startswith("LEAFDECK_DEV_TREE="):
+                tree = line.split("=", 1)[1].strip().strip('"')
+    if tree and os.path.isdir(tree):
+        cmd = [os.path.join(tree, "node_modules/electron/dist/electron"), tree, arg]
+    else:
+        app = next((a for a in ("/usr/bin/leafdeck", "/usr/lib/leafdeck/leafdeck", "/opt/Leafdeck/leafdeck") if os.access(a, os.X_OK)), None)
+        if not app:
+            return False
+        cmd = [app, arg]
+    subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    return True
+
+
+def local(arg):
+    """A file's or folder's full path, from a path or a file:// link; None if there's nothing there."""
+    if arg.lower().startswith("file://"):
+        arg = urllib.parse.unquote(urllib.parse.urlparse(arg).path)
+    path = os.path.abspath(arg)
+    return path if os.path.exists(path) else None
+
+
+def main():
+    if not sys.argv[1:]:
+        print("usage: leafdeck-open URL|PATH...", file=sys.stderr)
+        return 2
+    ok = True
+    for arg in sys.argv[1:]:
+        if arg.lower().startswith(("http://", "https://")):
+            if not via_leafdeckd("open-url", {"url": arg}) and not start_leafdeck(arg):
+                print(f"Couldn't reach Leafdeck. Open this link yourself: {arg}", file=sys.stderr)
+                ok = False
+        elif path := local(arg):
+            # A folder or a file that isn't a picture needs Leafdeck running: a new Leafdeck only shows pictures.
+            if not via_leafdeckd("open-file", {"path": path}) and not (path.lower().endswith(PICTURE) and start_leafdeck(path)):
+                print(f"Couldn't reach Leafdeck to show {path}", file=sys.stderr)
+                ok = False
+        else:
+            print(f"There's nothing at {arg}", file=sys.stderr)
+            ok = False
+    return 0 if ok else 1
+
+
+sys.exit(main())

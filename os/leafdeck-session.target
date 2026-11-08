@@ -1,0 +1,7 @@
+# The Leafdeck session in systemd's eyes (started and stopped by leafdeck-session). Binding graphical-session.target
+# starts what belongs to a graphical session, such as desktop portals, and stops it at sign-out.
+[Unit]
+Description=Leafdeck session
+BindsTo=graphical-session.target
+Wants=graphical-session-pre.target
+After=graphical-session-pre.target

@@ -1,0 +1,21 @@
+# Leafdeck OS: Leafdeck is the web browser (web links and HTML files), image viewer and file manager for every program
+# (os/leafdeck-open), and opens PDFs and text files in Files' preview, whatever started it: the Leafdeck session, a
+# systemd service, a GNOME session, or a program that cleared its environment. Installed as /etc/xdg/mimeapps.list,
+# so nothing falls back to another browser, image viewer or file manager.
+[Default Applications]
+x-scheme-handler/http=leafdeck-open.desktop
+x-scheme-handler/https=leafdeck-open.desktop
+text/html=leafdeck-open.desktop
+application/xhtml+xml=leafdeck-open.desktop
+image/png=leafdeck-open.desktop
+image/jpeg=leafdeck-open.desktop
+image/gif=leafdeck-open.desktop
+image/webp=leafdeck-open.desktop
+image/avif=leafdeck-open.desktop
+image/bmp=leafdeck-open.desktop
+image/svg+xml=leafdeck-open.desktop
+image/x-icon=leafdeck-open.desktop
+image/vnd.microsoft.icon=leafdeck-open.desktop
+inode/directory=leafdeck-open.desktop
+application/pdf=leafdeck-open.desktop
+text/plain=leafdeck-open.desktop

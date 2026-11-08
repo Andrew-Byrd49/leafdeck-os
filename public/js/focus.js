@@ -164,7 +164,7 @@ export function startFocus({ title, taskId = '', focusMin, breakMin = 0, rounds 
   persist();
   begin();
   if (!remote) publish();
-  toast(`Focus: ${title} — ${fmtMinutes(focusMin)}${rounds > 1 ? ` × ${rounds}` : ''}${remote ? ' (started on your phone)' : ''}`);
+  toast(`Focus: ${title} — ${fmtMinutes(focusMin)}${rounds > 1 ? ` × ${rounds}` : ''}${remote ? ' (started on another device)' : ''}`);
 }
 
 function begin() {

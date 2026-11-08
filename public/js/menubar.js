@@ -9,7 +9,6 @@ import { schemas } from './schemas.js';
 import { linkAppId } from './apps/system.js';
 import { shell } from './shell.js';
 import { openImport } from './apps/bookmarks.js';
-import { otherTabsMenuItems } from './devices.js';
 import { toggleOverview } from './overview.js';
 import { openFocusSetup } from './focus.js';
 import { toggleAppScreen } from './appscreen.js';
@@ -170,8 +169,6 @@ function menus() {
       '-',
       { label: 'Minimize All', disabled: !wins.size, act: minimizeAll },
       { label: 'Close All', disabled: !wins.size, act: closeAll },
-      '-',
-      ...otherTabsMenuItems(),
       wins.size && '-',
       ...[...wins.values()].map((x) => ({ label: x.app.name, checked: x === w, act: () => openApp(x.id) })),
     ],

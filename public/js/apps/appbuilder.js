@@ -43,7 +43,7 @@ const TIPS = [
   ['Save a version before big changes', 'If a change goes sideways, restore the last good version in App Builder and try again.'],
   ['Let the agent check its work', 'With Claude Code control on, the agent opens the app, takes screenshots and reads errors itself. Ask it to “check it in Leafdeck” after changes.'],
   ['Change direction in BRIEF.md', 'Edit the brief in the app’s folder and tell your agent “Read BRIEF.md again” to steer the whole app.'],
-  ['Keep secrets out', 'Don’t paste API keys or passwords into prompts or app data. App records sync to your server and phone.'],
+  ['Keep secrets out', 'Don’t paste API keys or passwords into prompts or app data. App records sync to your server.'],
 ];
 
 const ago = (t) => {

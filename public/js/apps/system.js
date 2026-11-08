@@ -9,7 +9,6 @@ import { sampleData } from '../sample.js';
 import { shell } from '../shell.js';
 import { mountWeb, SHARED_PARTITION, ENGINES, refreshSaverSettings, openSessionWindow } from './browser.js';
 import { openClearDataSheet } from './history.js';
-import { devicesRowsHtml, openPairingSheet, revokeDevice } from '../devices.js';
 import { manageCalendars } from './calendar.js';
 import { enterWidgetEdit, openWidgetGallery, resetWidgetArrangement } from '../widgets.js';
 import { openImportSheet } from './bookmarks.js';
@@ -494,10 +493,8 @@ registerApp({
           ${row('Lock now', `<div class="set-inline"><button class="btn small" data-os-lock>${icon('lock', 12)} Lock</button><button class="btn small" data-os-restart>Restart Leafdeck</button><button class="btn small" data-os-safe>Restart into safe mode</button></div>`, 'Restart Leafdeck after changing its code; you stay signed in. Safe mode starts it with its default settings, and Claude helps fix what’s wrong.')}
           <div class="os-about" data-os-about><p class="muted">Loading…</p></div>
         </div></section>` : ''}
-        ${store.mode === 'cloud' && !store.local ? `<section><h3>${icon('phone', 14)} Devices</h3><div class="set-group">
-          <div data-devices-rows>${devicesRowsHtml()}</div>
-          ${row('Pair a phone', `<button class="btn small" data-pair>${icon('plus', 12)} Show pairing code</button>`, 'The Leafdeck app for Android shares your tasks, notes, calendar, bookmarks and browsing history. Passwords stay on each device.')}
-          ${row('Keep browsing history', `<select data-pref="historyRetentionDays" data-number>${[[90, '90 days'], [365, '1 year'], [730, '2 years'], [0, 'Forever']].map(([v, l]) => `<option value="${v}" ${(p.historyRetentionDays ?? 365) === v ? 'selected' : ''}>${l}</option>`).join('')}</select>`, 'Shared history older than this is removed from every device')}
+        ${store.mode === 'cloud' && !store.local ? `<section><h3>${icon('clock', 14)} Browsing history</h3><div class="set-group">
+          ${row('Keep browsing history', `<select data-pref="historyRetentionDays" data-number>${[[90, '90 days'], [365, '1 year'], [730, '2 years'], [0, 'Forever']].map(([v, l]) => `<option value="${v}" ${(p.historyRetentionDays ?? 365) === v ? 'selected' : ''}>${l}</option>`).join('')}</select>`, 'History older than this is removed from your server')}
         </div></section>` : ''}
 
 
@@ -721,18 +718,12 @@ registerApp({
 
     win.body.addEventListener('click', async (e) => {
       const t = e.target;
-      if (t.closest('[data-pair]')) return openPairingSheet(win);
       if (t.closest('[data-briefing-open]')) return import('../briefing.js').then((b) => b.openBriefing());
       if (t.closest('[data-os-lock]')) return shell.os.lock();
       if (t.closest('[data-os-restart]')) return shell.windowAction('restart-leafdeck');
       if (t.closest('[data-claude-settings]')) return openApp('claudesettings');
       if (t.closest('[data-os-safe]')) return confirmDialog('Restart Leafdeck into safe mode? It starts with its default settings (no saved display arrangement or window layout) and opens Claude with what it found. Try Leafdeck now there brings the normal start back.', { title: 'Safe mode', ok: 'Restart into safe mode', win }).then((ok) => ok && shell.windowAction('safe-mode'));
       if (t.closest('[data-briefing-custom]')) return import('../briefing.js').then((b) => b.customizeBriefing());
-      const revoke = t.closest('[data-device-revoke]');
-      if (revoke) {
-        await revokeDevice(revoke.dataset.deviceRevoke).catch((e) => toast(e.message, 'error'));
-        return drawAll();
-      }
       const acc = t.closest('[data-accent]');
       if (acc) {
         store.setPrefs({ accent: acc.dataset.accent });
@@ -936,13 +927,6 @@ registerApp({
       }
     };
     win.watch(['links'], drawAll);
-    // The device list changes on its own (a phone pairs, reports tabs): refresh just those rows.
-    const onSync = () => {
-      if (!win.el.isConnected) return store.removeEventListener('sync', onSync);
-      const box = $('[data-devices-rows]', win.body);
-      if (box) box.innerHTML = devicesRowsHtml();
-    };
-    store.addEventListener('sync', onSync);
     drawAll();
   },
 });

@@ -37,7 +37,6 @@ contextBridge.exposeInMainWorld('desktopShell', {
   appUpdate: invoke('shell:app-update'),
   setServerUrl: invoke('shell:set-server-url'),
   importFromServer: invoke('data:import-from-server'),
-  pairingExtras: invoke('shell:pairing-extras'),
   userApps: {
     list: invoke('userapps:list'),
     create: invoke('userapps:create'),

@@ -8,7 +8,6 @@ import { addResolver, openApp, focus, closeMenu, showMenu, toast, wins, activeWi
 import { store } from '../store.js';
 import { editRecord, recordMatches } from '../schemas.js';
 import { shell } from '../shell.js';
-import { sendMenuItems } from '../devices.js';
 import { findBookmark, favicon } from './bookmarks.js';
 import { toggleBookmarksPanel, closeBookmarksPanel } from './bookmarkspanel.js';
 import { drawStartBookmarks } from './startpage.js';
@@ -1316,7 +1315,6 @@ export function mountWeb(win, { url = '', partition = SHARED_PARTITION, onTitle,
         { label: 'Actual Size', key: 'Ctrl+0', act: () => zoom(0), disabled: !wv },
         '-',
         { label: 'Copy Page Address', act: () => navigator.clipboard.writeText(currentUrl()).then(() => toast('Address copied')), disabled: !current },
-        ...(isBurnerPartition(partition) ? [] : sendMenuItems(current ? currentUrl() : '', $('.win-title-text', win.el)?.textContent || '')),
         { label: 'Open in Your Default Browser', act: () => shell.openExternal(currentUrl()), disabled: !current },
         '-',
         { label: `Keep ${host || 'This Site'} Awake`, checked: awake, disabled: !current, act: () => shell.perf.keepAwake(host, !awake).then(() => toast(awake ? `${host} can sleep again` : `${host} won’t be paused or put to sleep`)) },
@@ -1465,16 +1463,6 @@ export function openWebPage(url = '', partition = SHARED_PARTITION, handoff = nu
 }
 
 export const openBurnerWindow = (url = '') => openWebPage(url, newBurnerPartition());
-
-/** Open, non-burner site windows as { url, title } — what other devices see as "open on the desktop". */
-export function openSiteTabs() {
-  const out = [];
-  for (const [id, p] of pages) {
-    if (!wins.has(id) || !p.url || isBurnerPartition(p.partition)) continue;
-    out.push({ url: p.url, title: p.title || '' });
-  }
-  return out;
-}
 
 /** Forget saved pages that weren't reopened (call after session restore). */
 export function prunePages() {

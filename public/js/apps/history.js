@@ -78,7 +78,7 @@ registerApp({
     const draw = () => {
       if (!rows.length) {
         win.body.innerHTML = `<div class="empty"><div class="empty-title">${q ? 'No matches' : 'No history yet'}</div>
-          <p>${q ? 'Try different words.' : 'Pages you visit in Leafdeck — on this computer or your phone — show up here.'}</p></div>`;
+          <p>${q ? 'Try different words.' : 'Pages you visit in Leafdeck show up here.'}</p></div>`;
         return;
       }
       let day = '';
@@ -86,11 +86,10 @@ registerApp({
         .map((r) => {
           const d = dayLabel(r.visitedAt);
           const head = d !== day ? `<h4>${esc((day = d))}</h4>` : '';
-          const from = r.deviceId && r.deviceId !== 'desktop' ? `<span class="chip hist-dev">${icon('phone', 10)} ${esc(r.deviceName || 'Phone')}</span>` : '';
           return `${head}<div class="hist-row" data-id="${esc(String(r.id))}" data-uid="${esc(r.uid || (shell ? '' : r.id))}" data-url="${esc(r.url)}" title="${esc(r.url)}">
             <span class="hist-time">${timeLabel(r.visitedAt)}</span>
             <img class="fav" src="${esc(favicon(r.url))}" alt="" loading="lazy" referrerpolicy="no-referrer">
-            <span class="bm-main"><b>${esc(r.title || hostOf(r.url))}</b><small>${esc(hostOf(r.url))}${from}</small></span>
+            <span class="bm-main"><b>${esc(r.title || hostOf(r.url))}</b><small>${esc(hostOf(r.url))}</small></span>
             <button class="icon-btn" data-remove title="Remove from history">${icon('x', 13)}</button></div>`;
         })
         .join('')}${done ? '' : '<div class="hist-more"><button class="btn small" data-more>Load more</button></div>'}</div>`;
@@ -124,7 +123,7 @@ registerApp({
       openWebPage(row.dataset.url);
     });
 
-    // Visits from the phone arrived: refresh (only while nothing is typed, so a search isn't disturbed).
+    // Visits from elsewhere arrived: refresh (only while nothing is typed, so a search isn't disturbed).
     const onRemote = () => {
       if (!win.el.isConnected) return removeEventListener('leafdeck:history', onRemote);
       if (!q) load();

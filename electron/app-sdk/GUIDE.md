@@ -72,7 +72,7 @@ leafdeck.on('toolbar', ({ id, value }) => {});                       // a title-
 - Every record has `id`, `createdAt` and `updatedAt`. Keep the `id` when updating.
 - A save replaces the whole record, so spread the existing one and change what you need.
 - Keep each record small (under about 100 KB; a hard limit is 1 MB). Store many small records rather than one big one.
-- Don't store secrets (API keys, passwords) in records. They sync to the user's server and phone.
+- Don't store secrets (API keys, passwords) in records. They sync to the user's server.
 
 **Built-in record shapes** (the fields Leafdeck's own apps use; keep to them so records show up properly there)
 - `tasks`: `title, due ("YYYY-MM-DD"), dueTime ("HH:MM"), remindAt ("YYYY-MM-DDTHH:MM"), status ("To Do" | "In Progress" | "Done"), priority ("Low" | "Medium" | "High"), contactId, tags, notes`

@@ -2925,12 +2925,6 @@ body.wm-busy .win-seam:not(.active) { pointer-events: none; }
 .toast { display: flex; align-items: center; gap: 12px; }
 /* #toasts lets clicks through to what's under it; a toast's button takes them. */
 .toast-act { pointer-events: auto; padding: 3px 10px; border: 0; border-radius: 7px; background: var(--accent); color: var(--accent-ink); font-weight: 600; font-size: 12px; cursor: pointer; }
-.pair-body { display: flex; gap: 22px; align-items: center; padding: 6px 22px 18px; }
-.qr { width: 196px; height: 196px; flex-shrink: 0; padding: 8px; border-radius: 12px; background: #fff; }
-.qr svg { display: block; width: 100%; height: 100%; }
-.pair-side { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
-.pair-code { font-family: ui-monospace, Consolas, monospace; font-size: 26px; font-weight: 700; letter-spacing: 0.08em; user-select: all; }
-.hist-dev { margin-left: 6px; vertical-align: 1px; display: inline-flex; align-items: center; gap: 3px; }
 
 /* The hovered link's address, bottom-left of a site window (Chrome-style status bubble). */
 .web-status {
@@ -5312,12 +5306,6 @@ body.wm-busy .win-seam:not(.active) { pointer-events: none; }
 .toast { display: flex; align-items: center; gap: 12px; }
 /* #toasts lets clicks through to what's under it; a toast's button takes them. */
 .toast-act { pointer-events: auto; padding: 3px 10px; border: 0; border-radius: 7px; background: var(--accent); color: var(--accent-ink); font-weight: 600; font-size: 12px; cursor: pointer; }
-.pair-body { display: flex; gap: 22px; align-items: center; padding: 6px 22px 18px; }
-.qr { width: 196px; height: 196px; flex-shrink: 0; padding: 8px; border-radius: 12px; background: #fff; }
-.qr svg { display: block; width: 100%; height: 100%; }
-.pair-side { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
-.pair-code { font-family: ui-monospace, Consolas, monospace; font-size: 26px; font-weight: 700; letter-spacing: 0.08em; user-select: all; }
-.hist-dev { margin-left: 6px; vertical-align: 1px; display: inline-flex; align-items: center; gap: 3px; }
 
 /* The hovered link's address, bottom-left of a site window (Chrome-style status bubble). */
 .web-status {

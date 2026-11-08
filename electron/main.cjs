@@ -3077,13 +3077,6 @@ handle('history:pending', (limit) => history.pending(Math.min(Number(limit) || 5
 handle('history:mark-synced', (uids) => history.markSynced(Array.isArray(uids) ? uids.slice(0, 1000) : []));
 handle('history:apply-remote', (visits) => history.applyRemote(Array.isArray(visits) ? visits.slice(0, 5000) : []));
 
-// What a phone needs to reach the server besides its own token: the Access service token, if this desktop uses one.
-handle('shell:pairing-extras', () => {
-  const id = getSecret('accessClientId');
-  const secret = getSecret('accessClientSecret');
-  return { serverUrl: serverUrl(), access: id && secret ? [id, secret] : null };
-});
-
 /* ----- Downloads ----- */
 
 handle('downloads:list', () => downloads.list());

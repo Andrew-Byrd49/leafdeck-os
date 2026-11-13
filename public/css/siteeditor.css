@@ -1,0 +1,109 @@
+/* The Site Editor's inspector (public/js/siteeditor/inspector.js) and the page at a width. It borrows Designer's
+   inspector pieces (.dzi-*, designer.css); what's here is the Site Editor's own: the scope bar, the spacing box, the
+   marks for what's changed and what the project sets, the page's CSS rules. The app's frame is in app.css (.se-*). */
+
+.se-insp, .se-pane[data-pane='edit'] {
+  --dz-blue: var(--accent);
+  --dz-line: var(--line);
+  --dz-field: light-dark(rgba(0, 0, 0, 0.05), rgba(255, 255, 255, 0.08));
+  --dz-panel: light-dark(#fff, #4a4a4c);
+  --sei-chg: light-dark(rgba(13, 153, 255, 0.12), rgba(13, 153, 255, 0.22));
+}
+.se-insp .dzi-sec { border-bottom: 0.5px solid var(--line); }
+.se-insp .dzi-sec.collapsible > header { padding: 0 12px; }
+.se-insp .dzi-sec.collapsible > header:hover h4 { color: var(--text); }
+.se-insp .dzi-body { gap: 6px; }
+.se-insp .dzi-select { padding: 0 4px; }
+.se-insp .dzi-num input { text-overflow: ellipsis; }
+.se-insp .dzi-l { font-size: 10.5px; white-space: nowrap; }
+.se-insp .dzi-l svg, .se-insp .sei-lab svg { display: block; }
+.se-insp .dzi-seg.txt button { width: auto; padding: 0 8px; font-weight: 500; }
+.se-insp .dzi-seg.grow { flex: 1; }
+.se-insp .dzi-seg.grow button { flex: 1; min-width: 0; padding: 0 2px; }
+.se-insp .dzi-seg em { font-family: Georgia, 'Times New Roman', serif; font-size: 13px; }
+.se-insp .dzi-icon.txt { font-size: 11px; flex-shrink: 0; }
+.se-insp .dzi-kv input[readonly] { color: var(--text-2); }
+.se-insp .dzi-keys dd small { cursor: default; }
+
+/* Where it is, and what's inside it. */
+.sei-crumbs { display: flex; align-items: center; gap: 3px; padding: 0 12px 6px; font-size: 11px; color: var(--text-3); white-space: nowrap; overflow: hidden; }
+.sei-crumbs button { border: 0; background: none; padding: 1px 3px; border-radius: 4px; color: var(--text-3); font: inherit; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 10.5px; min-width: 0; overflow: hidden; text-overflow: ellipsis; flex-shrink: 1; }
+.sei-crumbs button:hover { background: var(--dz-field); color: var(--text); }
+.sei-crumbs i { font-style: normal; opacity: 0.6; }
+.sei-crumbs b { font-weight: 600; color: var(--text-2); font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 10.5px; flex-shrink: 0; }
+.sei-crumbs .sei-kids { margin-left: auto; font-family: inherit; font-size: 11px; display: inline-flex; align-items: center; gap: 3px; flex-shrink: 0; }
+
+/* What the styles apply to: this element or its class, a state, some widths. */
+.sei-scope { display: flex; gap: 4px; padding: 8px 12px; border-bottom: 0.5px solid var(--line); }
+.sei-scope .dzi-select { height: 26px; font-size: 11px; }
+.sei-scope .dzi-select:first-child { flex: 1.5; }
+.sei-scope .dzi-select.chg { background: var(--sei-chg); color: var(--accent); font-weight: 600; }
+.sei-scope.on { border-bottom: 0; padding-bottom: 4px; }
+.sei-scope-note { margin: 0; padding: 0 12px 8px; font-size: 11px; line-height: 1.4; color: var(--accent); border-bottom: 0.5px solid var(--line); }
+.sei-scope-note code { font-size: 10.5px; }
+
+/* A label, then its fields. */
+.sei-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.sei-row > .dzi-row { flex: 1; }
+.sei-lab { flex: 0 0 58px; font-size: 11px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: default; }
+.sei-narrow { flex: 0 0 86px; }
+.sei-gap { flex: 1; }
+.sei-row .sei-gap { flex: 0 0 72px; }
+.sei-count { flex: 0 0 40px; }
+.sei-count input { text-align: center; padding: 0 !important; }
+.sei-auto { justify-content: center; gap: 6px; }
+.sei-sub { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; padding-top: 8px; border-top: 0.5px dashed var(--line); }
+.sei-sub h5 { margin: 0; font-size: 10.5px; font-weight: 600; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sei-shadow { display: flex; flex-direction: column; gap: 6px; padding-left: 64px; }
+.sei-shadow .dzi-l { min-width: 0; padding: 0 4px; }
+
+/* Marks: changed here (blue), set by the project's CSS on this element (a full-strength label). */
+.sei-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+.se-insp .dzi-num.chg, .se-insp .dzi-select.chg, .se-insp .dzi-text.chg, .se-insp .dzi-color.chg, .se-insp .dzi-kv input.chg { background: var(--sei-chg); }
+.se-insp .dzi-seg.chg { box-shadow: inset 0 0 0 1px var(--accent); }
+.se-insp .dzi-num.chg .dzi-l, .sei-lab.chg { color: var(--accent); }
+.se-insp .dzi-num.set .dzi-l, .sei-lab.set { color: var(--text); }
+.se-insp input.bad, .se-insp .dzi-num:has(input.bad), .se-insp .dzi-color:has(input.bad) { border-color: #e5484d !important; }
+.sei-scrubbing, .sei-scrubbing * { cursor: ew-resize !important; user-select: none; }
+
+/* Position: the four offsets around the element. */
+.sei-inset { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 4px; align-items: center; }
+.sei-inset .t { grid-area: 1 / 2; }
+.sei-inset .l { grid-area: 2 / 1; }
+.sei-inset .sei-inset-mid { grid-area: 2 / 2; display: grid; place-items: center; height: 28px; border-radius: 5px; border: 1px dashed var(--line); color: var(--text-3); }
+.sei-inset .r { grid-area: 2 / 3; }
+.sei-inset .b { grid-area: 3 / 2; }
+
+/* Spacing: margin around padding around the element, a number on each side. */
+.sei-box { position: relative; display: grid; grid-template-columns: 40px minmax(0, 1fr) 40px; grid-template-rows: 26px auto 26px; align-items: center; justify-items: center; border-radius: 7px; border: 1px dashed light-dark(rgba(0, 0, 0, 0.2), rgba(255, 255, 255, 0.22)); background: light-dark(rgba(255, 159, 10, 0.07), rgba(255, 159, 10, 0.1)); }
+.sei-box.in { grid-area: 2 / 2; width: 100%; box-sizing: border-box; border-style: solid; border-color: light-dark(rgba(0, 0, 0, 0.14), rgba(255, 255, 255, 0.16)); background: light-dark(rgba(48, 176, 88, 0.1), rgba(48, 176, 88, 0.16)); }
+.sei-bt { position: absolute; left: 6px; top: 4px; font-size: 8.5px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--text-3); pointer-events: none; }
+.sei-bx { width: 36px; height: 20px; box-sizing: border-box; border: 1px solid transparent; border-radius: 4px; background: none; padding: 0; text-align: center; font: inherit; font-size: 11px; font-variant-numeric: tabular-nums; color: var(--text); cursor: ew-resize; text-overflow: ellipsis; }
+.sei-bx.top { grid-area: 1 / 2; }
+.sei-bx.right { grid-area: 2 / 3; }
+.sei-bx.bottom { grid-area: 3 / 2; }
+.sei-bx.left { grid-area: 2 / 1; }
+.sei-bx.zero { color: var(--text-3); }
+.sei-bx.set { font-weight: 600; }
+.sei-bx.chg { background: var(--sei-chg); color: var(--accent); font-weight: 600; }
+.sei-bx:hover { border-color: light-dark(rgba(0, 0, 0, 0.2), rgba(255, 255, 255, 0.25)); }
+.sei-bx:focus { outline: none; border-color: var(--accent); background: light-dark(#fff, #1c1c1e); cursor: text; }
+.sei-core { grid-area: 2 / 2; width: 100%; box-sizing: border-box; height: 26px; display: grid; place-items: center; border-radius: 4px; background: light-dark(#fff, #3a3a3c); box-shadow: inset 0 0 0 1px light-dark(rgba(0, 0, 0, 0.1), rgba(255, 255, 255, 0.1)); color: var(--text-3); font-size: 10.5px; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; }
+
+/* The page's own rules for the element. */
+.sei-rule { display: flex; flex-direction: column; border-radius: 6px; background: var(--dz-field); padding: 6px 4px 4px; }
+.sei-rule-h { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; padding: 0 4px 4px; font-size: 10.5px; }
+.sei-rule-h code { font-family: ui-monospace, Menlo, Consolas, monospace; font-weight: 600; color: var(--text); overflow-wrap: anywhere; }
+.sei-rule-h i { font-style: normal; color: var(--accent); }
+.sei-rule-h small { margin-left: auto; color: var(--text-3); }
+.sei-decl { border: 0; background: none; text-align: left; padding: 2px 4px; border-radius: 4px; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 10.5px; line-height: 1.45; color: var(--text-2); overflow-wrap: anywhere; }
+.sei-decl b { font-weight: 500; color: var(--text); }
+.sei-decl:hover { background: light-dark(rgba(0, 0, 0, 0.06), rgba(255, 255, 255, 0.1)); }
+
+/* The top bar's width and undo, and the page narrowed to a width. */
+.se-width { display: inline-flex; flex-direction: row; align-items: center; gap: 4px; width: auto; min-width: 28px; padding: 0 6px; white-space: nowrap; flex-shrink: 0; }
+.se-width b { font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.se-width b:empty { display: none; }
+.se.no-project .se-width, .se.no-project .se-undo { visibility: hidden; }
+.se-page.sized { background: light-dark(#e6e6ea, #0f0f10); overflow-x: auto; }
+.se-page.sized webview { flex: 0 0 var(--se-w); width: var(--se-w); margin: 0 auto; box-shadow: 0 0 0 0.5px var(--line), 0 6px 24px rgba(0, 0, 0, 0.14); }

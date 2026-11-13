@@ -67,7 +67,7 @@ const CATEGORIES = [
   ['yours', 'Your apps', 'sparkle', []],
   ['links', 'Connections', 'link', []],
   ['develop', 'Developer', 'code', ['terminal', 'claudecode', 'devtools']],
-  ['system', 'System', 'sliders', ['settings', 'claudesettings', 'files', 'taskmanager']],
+  ['system', 'System', 'sliders', ['settings', 'claudesettings', 'files', 'taskmanager', 'appstore']],
   ['other', 'Other', 'dots', []],
 ];
 const OF_ID = new Map(CATEGORIES.flatMap(([key, , , ids]) => ids.map((id) => [id, key])));

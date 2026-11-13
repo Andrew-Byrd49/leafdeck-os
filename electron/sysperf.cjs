@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
+const { spawn } = require('node:child_process');
 
 const LINUX = process.platform === 'linux';
 const TICK = 100; // USER_HZ: /proc/<pid>/stat counts CPU time in 1/100 s on every Linux we run on
@@ -341,4 +342,62 @@ function system() {
   return { at: Date.now(), cpu: cpu(), memory: memory(), disks: disks(), network: network(), temp: temperature(), fan: fan(), linux: LINUX };
 }
 
-module.exports = { system, processes, endProcess };
+/* Frames per second on each screen, from fps-helper.py. The helper stays up between the widget's samples and goes away
+   once they stop. */
+const FPS_HELPER = path.join(__dirname, 'fps-helper.py').replace('app.asar', 'app.asar.unpacked');
+const FPS_WINDOW = 1; // seconds watched per sample
+const FPS_IDLE = 10_000;
+let fpsChild = null;
+let fpsPending = null; // { resolve, timer } of the one sample in progress
+let fpsIdleTimer = 0;
+
+function fpsAnswer(value) {
+  if (!fpsPending) return;
+  const { resolve, timer } = fpsPending;
+  fpsPending = null;
+  clearTimeout(timer);
+  resolve(value);
+}
+
+function fpsStart() {
+  let buf = '';
+  const child = spawn('python3', ['-I', FPS_HELPER], { stdio: ['pipe', 'pipe', 'ignore'] });
+  child.stdin.on('error', () => {});
+  child.stdout.on('data', (d) => {
+    buf += d;
+    let nl;
+    while ((nl = buf.indexOf('\n')) >= 0) {
+      const line = buf.slice(0, nl);
+      buf = buf.slice(nl + 1);
+      try {
+        fpsAnswer(JSON.parse(line));
+      } catch {
+        fpsAnswer({});
+      }
+    }
+  });
+  const gone = () => {
+    if (fpsChild === child) fpsChild = null;
+    fpsAnswer({});
+  };
+  child.on('error', gone);
+  child.on('close', gone);
+  return child;
+}
+
+/** { screen name: frames per second }, measured now over about a second; {} when the screens can't be read. */
+function screenFps() {
+  if (!LINUX) return Promise.resolve({});
+  clearTimeout(fpsIdleTimer);
+  fpsIdleTimer = setTimeout(() => fpsChild?.kill(), FPS_IDLE);
+  fpsIdleTimer.unref();
+  if (fpsPending) return fpsPending.promise;
+  fpsChild ??= fpsStart();
+  let resolve;
+  const promise = new Promise((r) => (resolve = r));
+  fpsPending = { promise, resolve, timer: setTimeout(() => fpsChild?.kill(), (FPS_WINDOW + 3) * 1000) };
+  fpsChild.stdin.write(`${FPS_WINDOW}\n`);
+  return promise;
+}
+
+module.exports = { system, processes, endProcess, screenFps };

@@ -7,9 +7,11 @@ import { shell } from './shell.js';
 import { $, el, esc } from './util.js';
 import { icon, ICONS } from './icons.js';
 import { registerApp, registry, openApp, wins, closeWindow, toast, refreshAppIcon, renderDock } from './wm.js';
+import { ask } from './dialogs.js';
 import { COLLECTIONS } from './schemas.js';
 
 const PARTITION = 'persist:leafapps';
+const STORE_PARTITION = 'persist:leafapps-store'; // electron/userapps.cjs
 const LS_GRANTS = 'ws:app-grants';
 const LS_OFF = 'ws:userapps-off';
 const OWN = 'appdata'; // every app's own records live here, tagged with the app's id
@@ -131,18 +133,21 @@ export function initUserApps() {
     const before = id && apps.get(id);
     await refreshUserApps();
     if (!id) return;
-    const w = wins.get(appWindowId(id));
-    if (!w) return;
     const m = apps.get(id);
     const permsChanged = JSON.stringify(before?.permissions) !== JSON.stringify(m?.permissions);
-    if (!m || permsChanged || !w.appView || !isApproved(m)) mountApp(w, id);
-    else {
-      w.setTitle(m.name);
-      try {
-        w.appView.reloadIgnoringCache();
-      } catch {}
+    // Its window, and App Builder's preview of it, if open.
+    for (const w of [wins.get(appWindowId(id)), ...[...previewHosts].filter((h) => h.userApp === id)]) {
+      if (!w) continue;
+      if (!m || m.blocked || permsChanged || !w.appView || !isApproved(m)) mountApp(w, id);
+      else {
+        w.setTitle(m.name);
+        try {
+          w.appView.reloadIgnoringCache();
+        } catch {}
+      }
     }
   });
+  shell.on('shell:store-app-link', ({ app, url }) => openStoreLink(app, url));
   // Light/dark and accent follow Leafdeck.
   store.addEventListener('change', (e) => ['settings', '*'].includes(e.detail.col) && broadcastTheme());
   matchMedia('(prefers-color-scheme: dark)').addEventListener('change', broadcastTheme);
@@ -161,6 +166,45 @@ export function openUserApp(id, { reload = false } = {}) {
   return { window: w.id, pending: appsOff() ? 'turned-off' : !isApproved(m) ? 'permissions' : m.hasIndex ? '' : 'no-index' };
 }
 
+/* ---------------- Links out of a store app ---------------- */
+
+const linkAsked = new Set(); // one question per app at a time, so an app can't stack them up
+const shortUrl = (u) => (u.length > 300 ? u.slice(0, 300) + '…' : u);
+
+/** A store app's address can carry anything it has read, so you see where it's going first (unless you've approved that site). */
+async function openStoreLink(id, url) {
+  const m = apps.get(id);
+  if (!m?.store || m.blocked || linkAsked.has(id)) return false;
+  let u;
+  try {
+    u = new URL(url);
+  } catch {
+    return false;
+  }
+  const mail = u.protocol === 'mailto:' || u.protocol === 'tel:';
+  if (!mail && u.protocol !== 'https:' && u.protocol !== 'http:') return false;
+  const known = u.protocol === 'https:' && grantedFor(id)?.includes(`network:${u.hostname}`);
+  if (!known) {
+    linkAsked.add(id);
+    let r;
+    try {
+      r = await ask({
+        title: `Open a link from ${m.name}?`,
+        message: mail ? 'This starts a message in your mail or phone app.' : u.hostname,
+        detail: shortUrl(url),
+        win: wins.get(appWindowId(id)),
+        buttons: [{ label: 'Cancel', value: null }, { label: mail ? 'Continue' : 'Open', value: 'ok', primary: true }],
+      });
+    } finally {
+      linkAsked.delete(id);
+    }
+    if (r?.button !== 'ok') return false;
+  }
+  if (mail) await shell.appStore.openMail(url);
+  else (await import('./apps/browser.js')).openWebPage(url);
+  return true;
+}
+
 /* ---------------- Hosting one app ---------------- */
 
 function theme() {
@@ -171,15 +215,19 @@ function theme() {
 }
 function broadcastTheme() {
   const t = theme();
-  for (const w of wins.values()) if (w.appView && w.userApp) send(w.appView, 'leafapp:event', { type: 'theme', detail: t });
+  for (const w of [...wins.values(), ...previewHosts]) if (w.appView && w.userApp) send(w.appView, 'leafapp:event', { type: 'theme', detail: t });
 }
+/** Where else an app runs besides its window: App Builder's preview. A host looks like a window to mountApp:
+ *  `{ body, tools, cleanups, setTitle, close, focus, onPage }` (onPage gets the comment overlay's events). */
+export const previewHosts = new Set();
 const send = (wv, ch, payload) => {
   try {
     wv.send(ch, payload);
   } catch {}
 };
 
-function mountApp(win, id) {
+/** Run an app in a window, or in any host shaped like one (App Builder's preview; see previewHosts). */
+export function mountApp(win, id) {
   const m = apps.get(id);
   win.cleanups.forEach((f) => f());
   win.cleanups.length = 0;
@@ -191,6 +239,7 @@ function mountApp(win, id) {
     return;
   }
   win.setTitle(m.name);
+  if (m.blocked) return message(win, 'This app was taken down', `${m.name} was removed from the Leafdeck store and can’t be opened. Reason: ${m.blocked}`, 'Open the Leafdeck Store', () => openApp('appstore'));
   // The app's own controls (leafdeck.toolbar.set) go first, then Leafdeck's reload.
   win.appToolbar = [];
   win.tools.innerHTML = `<div class="ua-tools"></div><span class="ua-sep" hidden></span>
@@ -324,7 +373,8 @@ function consent(win, m) {
     : `<li>${icon('check', 14)}<span>Only its own data. It can’t see your other records.</span></li>`;
   win.body.innerHTML = `<div class="ua-consent">
     <div class="ua-c-head"><div class="ua-c-icon">${icon(m.icon || 'sparkle', 26)}</div>
-      <div><h2>${esc(m.name)}</h2><p>${esc(m.description || 'An app you built for Leafdeck.')}</p></div></div>
+      <div><h2>${esc(m.name)}</h2><p>${esc(m.description || (m.store ? 'An app from the Leafdeck store.' : 'An app you built for Leafdeck.'))}</p>
+        ${m.store ? `<p class="ua-c-from">${icon('tick', 12)} From ${esc(m.store.publisher.name)}${m.store.publisher.domain ? ` (${esc(m.store.publisher.domain)})` : ''}, a verified publisher</p>` : ''}</div></div>
     <h5>${before.length ? 'This app now wants to' : 'This app wants to'}</h5>
     <ul class="ua-perms">${rows}</ul>
     ${m.ignoredPermissions?.length ? `<p class="ua-c-note">Ignored (not supported): ${esc(m.ignoredPermissions.join(', '))}</p>` : ''}
@@ -336,7 +386,7 @@ function consent(win, m) {
       approve(m);
       emit();
       mountApp(win, m.id);
-    } else if (c === 'no') closeWindow(win);
+    } else if (c === 'no') win.close ? win.close() : closeWindow(win);
   });
 }
 
@@ -345,7 +395,7 @@ function startApp(win, m) {
   win.body.innerHTML = '<div class="embed userapp"></div>';
   const wrap = $('.embed', win.body);
   const wv = document.createElement('webview');
-  wv.setAttribute('partition', PARTITION);
+  wv.setAttribute('partition', m.store ? STORE_PARTITION : PARTITION);
   wv.setAttribute('src', `leafapp://${m.id}/index.html`);
   wrap.append(wv);
   win.appView = wv;
@@ -415,6 +465,7 @@ function startApp(win, m) {
     },
     openUrl: async (u) => {
       if (!/^https?:\/\//i.test(String(u))) throw new Error('Only http(s) addresses can be opened');
+      if (m.store) return openStoreLink(m.id, String(u));
       (await import('./apps/browser.js')).openWebPage(String(u));
       return true;
     },
@@ -436,6 +487,13 @@ function startApp(win, m) {
   };
 
   wv.addEventListener('ipc-message', async (e) => {
+    if (e.channel === 'leafapp:page') {
+      // The comment overlay in App Builder's preview (public/js/siteeditor/inpage.js) reporting a selection or comment.
+      try {
+        win.onPage?.(JSON.parse(e.args[0]));
+      } catch {}
+      return;
+    }
     if (e.channel !== 'leafapp:call') return;
     const { id: callId, method, args } = e.args[0] || {};
     const fn = methods[method];
@@ -455,7 +513,7 @@ function startApp(win, m) {
   wv.addEventListener('dom-ready', () => {
     send(wv, 'leafapp:event', { type: 'ready', detail: { app: { id: m.id, name: m.name, permissions: [...granted] }, theme: theme(), icons: iconPaths() } });
   });
-  wv.addEventListener('focus', () => import('./wm.js').then((wm) => wm.focus(win)));
+  wv.addEventListener('focus', () => (win.focus ? win.focus() : import('./wm.js').then((wm) => wm.focus(win))));
   wv.addEventListener('did-fail-load', (e) => {
     if (!e.isMainFrame || e.errorCode === -3) return;
     wrap.append(el(`<div class="web-error"><b>This app couldn’t load</b><span>${esc(e.errorDescription || 'Unknown error')}</span></div>`));

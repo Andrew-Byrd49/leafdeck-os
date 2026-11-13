@@ -72,6 +72,7 @@
     "asarUnpack": [
       "electron/pty-helper.py",
       "electron/notify-helper.py",
+      "electron/fps-helper.py",
       "electron/desktop-helper.py",
       "electron/leafdeckd.cjs",
       "electron/leafdeckd-client.cjs",

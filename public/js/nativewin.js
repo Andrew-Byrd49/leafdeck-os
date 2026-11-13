@@ -5,7 +5,7 @@
 // Dock…), the stacking order and which has the keyboard; it does that every frame, sending only what changed.
 // A program that draws its own title bar (GNOME's apps, Spotify, Chrome) gets a frame without Leafdeck's: its title bar
 // moves the frame (the compositor passes the pointer on: grab, drag, dragend) and its buttons maximize and minimize it.
-import { addResolver, openApp, wins, closeWindow, focus, activeWindow, toggleMax, minimize, renderDock, externalDrag, pageScale, syncFullscreen } from './wm.js';
+import { addResolver, openApp, wins, closeWindow, focus, activeWindow, registry, toggleMax, minimize, renderDock, externalDrag, pageScale, syncFullscreen } from './wm.js';
 import { shell } from './shell.js';
 
 const comp = shell?.compositor;

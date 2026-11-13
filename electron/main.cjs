@@ -64,6 +64,7 @@ const adblock = require('./adblock.cjs');
 const mcp = require('./mcp.cjs');
 const history = require('./history.cjs');
 const userApps = require('./userapps.cjs');
+const appStore = require('./appstore.cjs');
 const agentChat = require('./agentchat.cjs');
 const chatHost = require('./chathost.cjs');
 const codeGit = require('./codegit.cjs');
@@ -72,6 +73,7 @@ const claudeUsage = require('./claudeusage.cjs');
 const rescue = require('./rescue.cjs');
 const sysPerf = require('./sysperf.cjs');
 const osLock = require('./oslock.cjs');
+const uiWatch = require('./uiwatch.cjs');
 const osPower = require('./ospower.cjs');
 const osSched = require('./ossched.cjs');
 const osNotify = require('./osnotify.cjs');
@@ -1030,7 +1032,7 @@ app.on('web-contents-created', (_e, contents) => {
   // Only the Leafdeck UI may host webviews, and every one is locked down.
   contents.on('will-attach-webview', (event, prefs, params) => {
     // A user app: its own sandbox and the leafdeck bridge, nothing else (see electron/userapps.cjs).
-    if (isUI(contents) && userApps.isAppUrl(params.src) && params.partition === userApps.PARTITION) {
+    if (isUI(contents) && userApps.isAppUrl(params.src) && params.partition === (appStore.isStoreId(userApps.appIdOf(params.src)) ? userApps.STORE_PARTITION : userApps.PARTITION)) {
       prefs.preload = APP_PRELOAD;
       prefs.nodeIntegration = false;
       prefs.nodeIntegrationInSubFrames = false;
@@ -1077,16 +1079,26 @@ app.on('web-contents-created', (_e, contents) => {
   const host = () => contents.hostWebContents;
 
   // A user app's webview: it may navigate only within its own folder; links out open as Leafdeck site windows.
-  if (contents.session === session.fromPartition(userApps.PARTITION)) {
+  const storeApp = contents.session === session.fromPartition(userApps.STORE_PARTITION);
+  if (storeApp || contents.session === session.fromPartition(userApps.PARTITION)) {
+    if (storeApp) contents.setWebRTCIPHandlingPolicy('disable_non_proxied_udp'); // see userApps.applyStoreNetwork
     userApps.attachLogs(contents);
     const ownApp = () => userApps.appIdOf(contents.getURL());
+    // A store app's links can carry what it knows in the address, so the UI asks first (public/js/userapps.js).
+    const storeLink = (url) => {
+      if (!appStore.isStoreId(ownApp())) return false;
+      if (isWebUrl(url) || /^(mailto|tel):/i.test(url)) host()?.send('shell:store-app-link', { app: ownApp(), url });
+      return true;
+    };
     contents.on('will-navigate', (event, url) => {
       if (userApps.appIdOf(url) && userApps.appIdOf(url) === ownApp()) return;
       event.preventDefault();
+      if (storeLink(url)) return;
       if (isWebUrl(url)) host()?.send('shell:open-url', { url, mode: 'window' });
       else if (/^(mailto|tel):/i.test(url)) openLinkOrMail(url);
     });
     contents.setWindowOpenHandler(({ url }) => {
+      if (storeLink(url)) return { action: 'deny' };
       if (isWebUrl(url)) host()?.send('shell:open-url', { url, mode: 'window' });
       return { action: 'deny' };
     });
@@ -1883,6 +1895,56 @@ handle('userapps:launch-agent', (id, agent, prompt) => {
 });
 handle('userapps:first-prompt', () => userApps.FIRST_PROMPT);
 handle('userapps:install-agent', (agent) => userApps.installAgent(String(agent || 'claude')));
+// App Builder's own settings (config.json "appbuilder"): how much Claude asks before building. Changing it restarts
+// idle chats so the next message gets the new wording.
+const builderPrefs = () => {
+  const c = readConfig().appbuilder || {};
+  return { ask: userApps.ASK_LEVELS.includes(c.ask) ? c.ask : 'lots' };
+};
+handle('userapps:prefs', () => builderPrefs());
+handle('userapps:set-prefs', (patch) => {
+  const cur = builderPrefs();
+  const p = patch && typeof patch === 'object' ? patch : {};
+  writeConfig({ appbuilder: { ask: userApps.ASK_LEVELS.includes(p.ask) ? p.ask : cur.ask } });
+  agentChat.restartIdle();
+  return builderPrefs();
+});
+// Per app: the chats and comments (<app>/.leafdeck/builder.json), and the comment overlay in the app's preview.
+handle('userapps:builder-state', (id) => userApps.readBuilderState(String(id)));
+handle('userapps:set-builder-state', (id, patch) => userApps.patchBuilderState(String(id), patch));
+handle('userapps:new-chat', (id) => userApps.newChat(String(id)));
+handle('userapps:remove-chat', (id, n) => {
+  id = String(id);
+  n = Number(n);
+  agentChat.stop(`@app:${id}:${n}`);
+  return userApps.removeChat(id, n);
+});
+handle('userapps:page', (wcId, mode, opts) => userApps.page(Number(wcId) || 0, String(mode || ''), opts && typeof opts === 'object' ? opts : {}));
+handle('userapps:shot', async (wcId) => {
+  const wc = webContents.fromId(Number(wcId) || 0);
+  if (!isOurWebview(wc) || !userApps.isAppUrl(wc.getURL())) return null;
+  try {
+    const img = await wc.capturePage();
+    return img.isEmpty() ? null : img.toDataURL();
+  } catch {
+    return null;
+  }
+});
+
+/* ---------------- The Leafdeck store (the Store app, App Builder's Publish) ---------------- */
+
+handle('appstore:catalog', () => appStore.catalog());
+handle('appstore:install', (id) => appStore.install(String(id)));
+handle('appstore:remove', (id) => appStore.removeApp(String(id)));
+handle('appstore:customize', (id) => userApps.customizeStoreApp(String(id)));
+handle('appstore:publisher-status', () => appStore.publisherStatus());
+handle('appstore:set-publisher-key', (key) => appStore.setPublisherKey(String(key || '')));
+handle('appstore:forget-publisher-key', () => appStore.forgetPublisherKey());
+handle('appstore:preflight', (id) => appStore.preflight(userApps.appDir(String(id))));
+handle('appstore:publish', (id) => appStore.publish(userApps.appDir(String(id))));
+handle('appstore:open-mail', (url) => {
+  if (/^(mailto|tel):/i.test(String(url))) openLinkOrMail(String(url));
+});
 
 // Leafdeck OS (electron/ossystem.cjs): power, sound, brightness, network and battery, only in the OS session.
 // Its settings: when to lock (electron/oslock.cjs), and when to turn the screen off and sleep, on battery and plugged in,
@@ -2282,6 +2344,8 @@ handle('designer:fetch-images', (urls) => designer.fetchImages(Array.isArray(url
 const obj = (o) => (o && typeof o === 'object' && !Array.isArray(o) ? o : {});
 handle('siteeditor:run', (wcId, mode, opts) => siteEditor.run(Number(wcId) || 0, String(mode || ''), obj(opts)));
 handle('siteeditor:origins', (wcId, selector, props) => siteEditor.origins(Number(wcId) || 0, String(selector || '').slice(0, 2000), Array.isArray(props) ? props.map(String).slice(0, 60) : []));
+handle('siteeditor:inspect', (wcId, selector, opts) => siteEditor.inspect(Number(wcId) || 0, String(selector || '').slice(0, 2000), { props: Array.isArray(obj(opts).props) ? opts.props.map(String).slice(0, 400) : [], state: String(obj(opts).state || ''), rules: !!obj(opts).rules }));
+handle('siteeditor:force-state', (wcId, selector, state) => siteEditor.forceState(Number(wcId) || 0, String(selector || '').slice(0, 2000), String(state || '')));
 handle('siteeditor:shot', (wcId, rect) => siteEditor.shot(Number(wcId) || 0, rect && typeof rect === 'object' ? { x: Number(rect.x) || 0, y: Number(rect.y) || 0, w: Number(rect.w) || 0, h: Number(rect.h) || 0 } : null));
 handle('siteeditor:state', (pid) => siteEditor.readState(String(pid)));
 handle('siteeditor:save', (pid, state) => siteEditor.writeState(String(pid), obj(state)));
@@ -2343,7 +2407,11 @@ const PROJECT_CHAT = /^@project:([a-z0-9]{6,12}):(\d{1,4})$/;
 const SITE_CHAT = /^@site:([a-z0-9]{6,12})$/;
 // Claude Settings' chat (electron/claudeconfig.cjs): Claude Code in the home folder, changing how Claude Code behaves.
 const SETTINGS_CHAT = '@claudesettings';
-const chatId = (id) => (id === ASSISTANT || id === SETTINGS_CHAT || (id === SAFEMODE_CHAT && SAFE) ? id : DESIGN_CHAT.test(String(id)) || PROJECT_CHAT.test(String(id)) || SITE_CHAT.test(String(id)) ? String(id) : appId(id));
+// An App Builder chat: "@app:<app id>:<n>", Claude Code in the app's folder; the transcript is in the app's
+// .leafdeck/chats/<n>/ (electron/userapps.cjs). Each app has as many as the user starts. A bare app id is the one chat
+// from before (it's moved into chat 1 when the builder first lists the app).
+const APP_CHAT = /^@app:([a-z0-9][a-z0-9-]{0,40}):(\d{1,4})$/;
+const chatId = (id) => (id === ASSISTANT || id === SETTINGS_CHAT || (id === SAFEMODE_CHAT && SAFE) ? id : DESIGN_CHAT.test(String(id)) || PROJECT_CHAT.test(String(id)) || SITE_CHAT.test(String(id)) || APP_CHAT.test(String(id)) ? String(id) : appId(id));
 const assistantDir = () => {
   const d = path.join(app.getPath('userData'), 'assistant');
   fs.mkdirSync(d, { recursive: true });
@@ -2563,7 +2631,7 @@ handle('agentchat:send', (id, text, opts) => {
   else if (PROJECT_CHAT.test(id) || SITE_CHAT.test(id)) {
     if (!projectOf((PROJECT_CHAT.exec(id) || SITE_CHAT.exec(id))[1])) throw new Error('That project was removed');
   } else if (id !== ASSISTANT && id !== SAFEMODE_CHAT && id !== SETTINGS_CHAT && !guidesWritten.has(id)) {
-    userApps.writeGuides(userApps.appDir(id)); // the agent always reads the current guide
+    userApps.writeGuides(userApps.appDir(APP_CHAT.exec(id)?.[1] || id)); // the agent always reads the current guide
     guidesWritten.add(id);
   }
   // Pictures pasted or attached in the Claude Code app (the others send text only), and its queue while Claude works.
@@ -2582,7 +2650,7 @@ handle('agentchat:answer', (id, requestId, decision, always, extra) => {
 // the models and commands), and handing a chat to a terminal (claude --resume).
 const pickable = (id) => {
   id = chatId(id);
-  if (!PROJECT_CHAT.test(id)) throw new Error('Only Claude Code app chats pick their own model and mode');
+  if (!PROJECT_CHAT.test(id) && !APP_CHAT.test(id)) throw new Error('Only Claude Code and App Builder chats pick their own model and mode');
   return id;
 };
 handle('agentchat:set', (id, picks) => {
@@ -2629,10 +2697,11 @@ handle('claudesettings:builtins', () => [
 ]);
 handle('agentchat:clear', (id) => agentChat.clear(chatId(id)));
 handle('agentchat:terminal', (id) => {
-  id = appId(id);
+  id = chatId(id);
+  const app = APP_CHAT.exec(id)?.[1] || appId(id);
   const resume = agentChat.handoff(id);
-  userApps.writeGuides(userApps.appDir(id));
-  return userApps.launchAgent(id, 'claude', undefined, { resume });
+  userApps.writeGuides(userApps.appDir(app));
+  return userApps.launchAgent(app, 'claude', undefined, { resume });
 });
 // Talking to Claude (electron/voice.cjs, Linux): the Copilot key and the microphone button in the Claude panel. The
 // module itself says no on other platforms; the UI only shows it on Linux.
@@ -2988,6 +3057,8 @@ function processRows() {
 const leafdeckPids = () => new Set([process.pid, ...app.getAppMetrics().map((m) => m.pid)]);
 // The battery comes along for the Performance widget (it reads /sys, so any Linux, not only the session).
 handle('perf:system', () => ({ ...sysPerf.system(), battery: process.platform === 'linux' ? osSystem.battery() : null }));
+// Real frames per screen: reads the display hardware's state, so only in the session.
+handle('perf:screen-fps', osOnly(() => sysPerf.screenFps()));
 handle('perf:processes', async () => {
   const r = await sysPerf.processes();
   // Leafdeck is its own processes plus every Electron helper under it (zygotes aren't in getAppMetrics). Programs it
@@ -3382,10 +3453,19 @@ app.whenReady().then(async () => {
   localdb.open({ dir: app.getPath('userData'), secret: getSecret, setSecret });
   userApps.init({
     protocolSession: session.fromPartition(userApps.PARTITION),
+    storeSession: session.fromPartition(userApps.STORE_PARTITION),
     win: () => win,
     onChange: (id) => toAllUI('shell:user-apps', { id }),
     builderConnection: () => mcp.builderConnection(),
+    publicDir: PUBLIC_DIR,
   });
+  appStore.init({
+    onChange: (id) => {
+      userApps.applyStoreNetwork();
+      toAllUI('shell:user-apps', { id });
+    },
+  });
+  userApps.applyStoreNetwork();
   const connect = (fn) => {
     try {
       return fn();
@@ -3436,6 +3516,8 @@ app.whenReady().then(async () => {
       if (pr) return projectDir(pr[1], pr[2]);
       const st = SITE_CHAT.exec(id);
       if (st) return siteEditor.dir(st[1]);
+      const ac = APP_CHAT.exec(id);
+      if (ac) return userApps.chatDir(ac[1], Number(ac[2]));
       const d = DESIGN_CHAT.exec(id);
       if (!d) return userApps.appDir(id);
       const dir = designer.dirOf(d[1]);
@@ -3500,10 +3582,18 @@ app.whenReady().then(async () => {
         }
         return { cwd: os.homedir(), args, mode };
       }
-      const dir = userApps.appDir(id);
+      // App Builder: Claude Code in the app's folder with the app tools (electron/mcp.cjs, builder scope). The chats
+      // numbered per app pick their own model and mode and get the builder's guidance, with how much to ask from the
+      // builder's settings; a bare app id is the chat from before the redo.
+      const ac = APP_CHAT.exec(id);
+      const dir = userApps.appDir(ac ? ac[1] : id);
       const conn = connect(() => mcp.builderConnection());
       if (conn) userApps.writeClaudeConfig(dir, conn);
-      return { cwd: dir, args: conn ? ['--mcp-config', '.leafdeck-mcp.json'] : [] };
+      const args = conn ? ['--mcp-config', '.leafdeck-mcp.json'] : [];
+      if (!ac) return { cwd: dir, args };
+      const { ask } = builderPrefs();
+      args.push('--append-system-prompt', userApps.builderPrompt(ask));
+      return { cwd: dir, args, pickable: true, askUser: ask !== 'never' };
     },
     claudeExe: () => userApps.which('claude'),
     infoCache: path.join(app.getPath('userData'), 'claude-code-info.json'),
@@ -3576,6 +3666,7 @@ app.whenReady().then(async () => {
         win?.webContents.send('os:locked', { locked });
       },
     });
+    uiWatch.init({ mainWindow: () => win, isLocked: () => osLock.isLocked(), screenFps: () => sysPerf.screenFps() });
     osPower.init({
       settings: osSettings,
       saveSettings: (patch) => writeConfig({ os: { ...(readConfig().os || {}), ...patch } }),

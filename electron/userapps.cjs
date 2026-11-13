@@ -9,16 +9,16 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const { app, shell } = require('electron');
+const { COLLECTIONS, isStoreId, normalizeManifest } = require('./appbundle.cjs');
+const appStore = require('./appstore.cjs');
 
 const PARTITION = 'persist:leafapps';
+const STORE_PARTITION = 'persist:leafapps-store'; // apps from the store: see applyStoreNetwork
 const SCHEME = 'leafapp';
 const ID = /^[a-z0-9][a-z0-9-]{1,40}$/;
 const SDK_DIR = path.join(__dirname, 'app-sdk');
 const MAX_LOG = 300;
 const MAX_VERSIONS = 20;
-
-/** Built-in collections an app may ask for ("tasks:read", "contacts:write"…). */
-const COLLECTIONS = ['tasks', 'notes', 'contacts', 'sprints', 'events', 'bookmarks'];
 
 let deps = null; // { win(), onChange(id|null) }
 const logs = new Map(); // app id -> [{ at, level, text }]
@@ -26,49 +26,23 @@ const logs = new Map(); // app id -> [{ at, level, text }]
 // LEAFDECK_APPS_DIR overrides the folder (development and testing).
 const appsDir = () => process.env.LEAFDECK_APPS_DIR || path.join(app.getPath('documents'), 'Leafdeck Apps');
 const appDir = (id) => {
-  if (!ID.test(String(id || ''))) throw new Error('Bad app id');
+  if (!ID.test(String(id || '')) || isStoreId(id)) throw new Error('Bad app id'); // store apps are read-only: see servingDir
   return path.join(appsDir(), id);
 };
+/** Where an app's files are read from: Leafdeck Apps for yours, the read-only store folder for the store's. */
+const servingDir = (id) => (isStoreId(id) ? appStore.dirOf(id) : appDir(id));
 
 /* ---------------- Manifest ---------------- */
 
 function readManifest(id) {
-  const raw = JSON.parse(fs.readFileSync(path.join(appDir(id), 'manifest.json'), 'utf8'));
+  const raw = JSON.parse(fs.readFileSync(path.join(servingDir(id), 'manifest.json'), 'utf8'));
   return normalizeManifest(id, raw);
-}
-
-/** Only the fields Leafdeck understands, with unknown permissions dropped (and reported). */
-function normalizeManifest(id, m) {
-  const perms = [];
-  const ignored = [];
-  for (const p of Array.isArray(m.permissions) ? m.permissions : []) {
-    const s = String(p).trim().toLowerCase();
-    const [what, how] = s.split(':');
-    if (COLLECTIONS.includes(what) && ['read', 'write'].includes(how)) perms.push(s);
-    else if (s === 'notify') perms.push(s);
-    else if (what === 'network' && /^[a-z0-9.-]+\.[a-z]{2,}$/.test(how || '')) perms.push(s);
-    // A program of the user's own on this computer (a helper that runs tools for the app), over plain http on loopback.
-    else if (what === 'local' && /^\d{4,5}$/.test(how || '') && +how >= 1024 && +how <= 65535) perms.push(s);
-    else ignored.push(String(p));
-  }
-  return {
-    id,
-    name: String(m.name || id).slice(0, 40),
-    description: String(m.description || '').slice(0, 300),
-    version: String(m.version || '0.1.0').slice(0, 20),
-    icon: /^[a-z-]{2,20}$/.test(m.icon || '') ? m.icon : 'sparkle',
-    glyph: typeof m.glyph === 'string' ? [...m.glyph].slice(0, 2).join('') : '',
-    color: /^[a-z]{3,10}$/.test(m.color || '') ? m.color : 'green',
-    size: Array.isArray(m.size) && m.size.length === 2 ? m.size.map((n) => Math.max(320, Math.min(2400, Number(n) || 800))) : [960, 680],
-    permissions: [...new Set(perms)].sort(),
-    ignoredPermissions: ignored,
-  };
 }
 
 function list() {
   let names = [];
   try {
-    names = fs.readdirSync(appsDir(), { withFileTypes: true }).filter((d) => d.isDirectory() && ID.test(d.name)).map((d) => d.name);
+    names = fs.readdirSync(appsDir(), { withFileTypes: true }).filter((d) => d.isDirectory() && ID.test(d.name) && !isStoreId(d.name)).map((d) => d.name);
   } catch {}
   const out = [];
   for (const id of names) {
@@ -79,7 +53,7 @@ function list() {
       out.push({ id, name: id, broken: `manifest.json: ${err.message}`, path: appDir(id), permissions: [], modified: 0 });
     }
   }
-  return out.sort((a, b) => b.modified - a.modified);
+  return [...out, ...appStore.installed()].sort((a, b) => b.modified - a.modified);
 }
 
 function newestMtime(dir) {
@@ -87,7 +61,7 @@ function newestMtime(dir) {
   const walk = (d, depth) => {
     if (depth > 4) return;
     for (const e of fs.readdirSync(d, { withFileTypes: true })) {
-      if (e.name === '.versions' || e.name === 'node_modules') continue;
+      if (e.name === '.versions' || e.name === '.leafdeck' || e.name === 'node_modules' || e.name.startsWith('.leafdeck-')) continue;
       const p = path.join(d, e.name);
       if (e.isDirectory()) walk(p, depth + 1);
       else newest = Math.max(newest, fs.statSync(p).mtimeMs);
@@ -108,13 +82,21 @@ const slug = (s) =>
     .replace(/^-+|-+$/g, '')
     .slice(0, 36) || 'my-app';
 
+/** An unused folder name. Never the shape of a store id, which would pass for a store app. */
+function freeId(name) {
+  let base = slug(name);
+  if (base.length < 2) base = 'app-' + base;
+  if (isStoreId(base)) base = 'my-' + base;
+  let id = base;
+  for (let n = 2; fs.existsSync(path.join(appsDir(), id)); n++) id = `${base.slice(0, 33)}-${n}`;
+  return id;
+}
+
 function create({ name, description = '' } = {}) {
   name = String(name || '').trim().slice(0, 40);
   if (!name) throw new Error('Give the app a name');
   fs.mkdirSync(appsDir(), { recursive: true });
-  let id = slug(name);
-  if (id.length < 2) id = 'app-' + id;
-  for (let n = 2; fs.existsSync(path.join(appsDir(), id)); n++) id = `${slug(name).slice(0, 33)}-${n}`;
+  const id = freeId(name);
   const dir = appDir(id);
   fs.mkdirSync(dir, { recursive: true });
   const manifest = { name, description: String(description).slice(0, 300), version: '0.1.0', icon: 'sparkle', color: 'green', permissions: [] };
@@ -123,6 +105,28 @@ function create({ name, description = '' } = {}) {
   fs.writeFileSync(path.join(dir, 'app.js'), STARTER_JS);
   fs.writeFileSync(path.join(dir, 'style.css'), STARTER_CSS);
   fs.writeFileSync(path.join(dir, 'BRIEF.md'), brief(name, description));
+  writeGuides(dir);
+  return { ...readManifest(id), path: dir };
+}
+
+/** "Make it yours": a store app copied to Leafdeck Apps as a new app of your own, which asks for its permissions afresh. */
+function customizeStoreApp(storeId) {
+  const from = appStore.dirOf(storeId);
+  if (appStore.blockedReason(storeId)) throw new Error('This app was taken down from the store.');
+  const m = readManifest(storeId);
+  fs.mkdirSync(appsDir(), { recursive: true });
+  const id = freeId(m.name);
+  const dir = appDir(id);
+  // Fresh files rather than copies: the store's are read-only and would stay that way.
+  const copy = (src, to) => {
+    fs.mkdirSync(to, { recursive: true });
+    for (const e of fs.readdirSync(src, { withFileTypes: true })) {
+      if (e.isDirectory()) copy(path.join(src, e.name), path.join(to, e.name));
+      else if (e.isFile()) fs.writeFileSync(path.join(to, e.name), fs.readFileSync(path.join(src, e.name)));
+    }
+  };
+  copy(from, dir);
+  fs.writeFileSync(path.join(dir, 'BRIEF.md'), brief(m.name, m.description));
   writeGuides(dir);
   return { ...readManifest(id), path: dir };
 }
@@ -276,20 +280,23 @@ const MIME = {
   '.wasm': 'application/wasm', '.txt': 'text/plain; charset=utf-8', '.md': 'text/plain; charset=utf-8',
 };
 
-/** Scripts only from the app's own folder (no CDNs); network only to hosts (and local ports) the manifest declares. */
-function csp(manifest) {
-  const hosts = [
-    ...manifest.permissions.filter((p) => p.startsWith('network:')).map((p) => 'https://' + p.slice(8)),
-    ...manifest.permissions.filter((p) => p.startsWith('local:')).flatMap((p) => [`http://127.0.0.1:${p.slice(6)}`, `http://localhost:${p.slice(6)}`]),
-  ];
+/**
+ * Scripts only from the app's own folder (no CDNs); network only to hosts (and local ports) the manifest declares.
+ * `strict` is for store apps, written by someone else: no inline code, and no image or connection that can carry data
+ * anywhere the manifest doesn't name.
+ */
+function csp(manifest, strict) {
+  const network = manifest.permissions.filter((p) => p.startsWith('network:')).map((p) => 'https://' + p.slice(8));
+  const hosts = [...network, ...manifest.permissions.filter((p) => p.startsWith('local:')).flatMap((p) => [`http://127.0.0.1:${p.slice(6)}`, `http://localhost:${p.slice(6)}`])];
   return [
     "default-src 'self'",
-    "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'",
+    strict ? "script-src 'self' 'wasm-unsafe-eval'" : "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'",
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
     "font-src 'self' data: https://fonts.gstatic.com",
-    "img-src 'self' data: blob: https:",
+    strict ? `img-src 'self' data: blob: ${network.join(' ')}`.trim() : "img-src 'self' data: blob: https:",
     "media-src 'self' data: blob:",
     `connect-src 'self' ${hosts.join(' ')}`.trim(),
+    "worker-src 'self'",
     "frame-src 'none'",
     "object-src 'none'",
     "base-uri 'none'",
@@ -297,7 +304,7 @@ function csp(manifest) {
   ].join('; ');
 }
 
-async function serve(request) {
+async function serve(request, storeSession) {
   let url;
   try {
     url = new URL(request.url);
@@ -306,25 +313,34 @@ async function serve(request) {
   }
   const id = url.hostname;
   if (!ID.test(id)) return new Response('Not found', { status: 404 });
+  const store = isStoreId(id);
+  if (store !== storeSession) return new Response('Not found', { status: 404 }); // each kind only in its own session
+  if (store && appStore.blockedReason(id)) return new Response('Taken down', { status: 410 });
   let rel = decodeURIComponent(url.pathname);
   if (rel === '/' || rel === '') rel = '/index.html';
   // Leafdeck's own files for apps: base styles at /_leafdeck/app.css.
-  const root = rel.startsWith('/_leafdeck/') ? SDK_DIR : appDir(id);
+  const root = rel.startsWith('/_leafdeck/') ? SDK_DIR : servingDir(id);
   if (rel.startsWith('/_leafdeck/')) rel = rel.slice('/_leafdeck'.length);
   const file = path.normalize(path.join(root, rel));
-  if (!file.startsWith(root + path.sep) || /[\\/]\.(versions|git)([\\/]|$)/.test(file)) return new Response('Forbidden', { status: 403 });
+  // Nothing hidden: .versions, .git, and .leafdeck-mcp.json with its Builder token. Judged inside the app's folder,
+  // because the path above it can have dots of its own (~/.config).
+  if (!file.startsWith(root + path.sep) || path.relative(root, file).split(path.sep).some((s) => s.startsWith('.'))) return new Response('Forbidden', { status: 403 });
   try {
     const body = await fs.promises.readFile(file);
-    const headers = { 'content-type': MIME[path.extname(file).toLowerCase()] || 'application/octet-stream', 'x-content-type-options': 'nosniff', 'cache-control': 'no-store' };
-    if (file.endsWith('.html')) {
-      let manifest;
-      try {
-        manifest = readManifest(id);
-      } catch {
-        manifest = { permissions: [] };
-      }
-      headers['content-security-policy'] = csp(manifest);
+    let manifest;
+    try {
+      manifest = readManifest(id);
+    } catch {
+      manifest = { permissions: [] };
     }
+    // On everything, not just pages: a worker or an SVG opened by itself takes its policy from its own response.
+    const headers = {
+      'content-type': MIME[path.extname(file).toLowerCase()] || 'application/octet-stream',
+      'x-content-type-options': 'nosniff',
+      'cache-control': 'no-store',
+      'x-dns-prefetch-control': 'off',
+      'content-security-policy': csp(manifest, store),
+    };
     return new Response(body, { status: 200, headers });
   } catch {
     return new Response('Not found', { status: 404 });
@@ -343,7 +359,7 @@ function watch() {
       if (!file) return;
       const parts = String(file).split(/[\\/]/);
       const id = parts[0];
-      if (!ID.test(id) || parts.includes('.versions') || parts.includes('node_modules') || parts.includes('.git')) {
+      if (!ID.test(id) || parts.includes('.versions') || parts.includes('.leafdeck') || parts.includes('node_modules') || parts.includes('.git') || parts.includes('.claude') || parts.some((x) => x.startsWith('.leafdeck-'))) {
         if (parts.length === 1) notifySoon(null); // an app folder was added or removed
         return;
       }
@@ -411,7 +427,7 @@ function copyDir(from, to, skip = () => false) {
   }
 }
 const versionsDir = (id) => path.join(appDir(id), '.versions');
-const skipMeta = (n) => n === '.versions' || n === 'node_modules' || n === '.git';
+const skipMeta = (n) => n === '.versions' || n === 'node_modules' || n === '.git' || n === '.leafdeck-store.json'; // the last: restoring an old version mustn't forget it's published
 
 function saveVersion(id, label = '') {
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
@@ -544,7 +560,7 @@ const agentStatus = () => Object.fromEntries(Object.entries(AGENTS).map(([k, a])
 /** Connect Claude Code in this app's folder to Leafdeck (builder-scoped MCP) and pre-approve the Leafdeck tools,
     which the builder token already limits to the user's apps. Used by the terminal launch and the App Builder chat. */
 function writeClaudeConfig(dir, conn) {
-  fs.writeFileSync(path.join(dir, '.gitignore'), '.leafdeck-*\n.versions/\n.codex/\n.claude/settings.local.json\nnode_modules/\n');
+  fs.writeFileSync(path.join(dir, '.gitignore'), '.leafdeck-*\n.leafdeck/\n.versions/\n.codex/\n.claude/settings.local.json\nnode_modules/\n');
   if (!conn) return;
   fs.writeFileSync(path.join(dir, '.leafdeck-mcp.json'), JSON.stringify({ mcpServers: { leafdeck: { type: 'http', url: conn.url, headers: { Authorization: `Bearer ${conn.token}` } } } }, null, 2));
   const sdir = path.join(dir, '.claude');
@@ -608,15 +624,143 @@ function launchAgent(id, agent = 'claude', prompt = FIRST_PROMPT, { dryRun = fal
   return { ok: true, connected: !!conn };
 }
 
+
+/* ---------------- App Builder: chats, comments and settings per app ----------------
+   Kept in <app>/.leafdeck/ (ignored by git, the watcher, versions and the store): builder.json holds the list of
+   chats (each chat's transcript is in .leafdeck/chats/<n>/, electron/agentchat.cjs) and the comments pinned on the
+   running app. An app from before chats were numbered has its transcript in the app folder itself: it becomes chat 1. */
+
+const builderDir = (id) => {
+  const d = path.join(appDir(id), '.leafdeck');
+  fs.mkdirSync(d, { recursive: true });
+  return d;
+};
+const chatDir = (id, n) => {
+  if (!Number.isInteger(n) || n < 1 || n > 9999) throw new Error('Bad chat');
+  const d = path.join(builderDir(id), 'chats', String(n));
+  fs.mkdirSync(d, { recursive: true });
+  return d;
+};
+const EMPTY_STATE = { chats: [], current: null, comments: [], nextComment: 1 };
+function readBuilderState(id) {
+  let st = {};
+  try {
+    st = JSON.parse(fs.readFileSync(path.join(builderDir(id), 'builder.json'), 'utf8')) || {};
+  } catch {}
+  const out = { ...EMPTY_STATE, ...st };
+  out.chats = (Array.isArray(out.chats) ? out.chats : []).filter((c) => c && Number.isInteger(c.n));
+  out.comments = (Array.isArray(out.comments) ? out.comments : []).filter((c) => c && typeof c.id === 'string');
+  // The one chat from before: its transcript moves into chats/1.
+  const legacy = ['.leafdeck-chat.jsonl', '.leafdeck-session.json', '.leafdeck-live.json', '.leafdeck-queue.json'].map((f) => path.join(appDir(id), f));
+  if (!out.chats.length && fs.existsSync(legacy[0])) {
+    const dir = chatDir(id, 1);
+    for (const f of legacy) if (fs.existsSync(f)) fs.renameSync(f, path.join(dir, path.basename(f)));
+    out.chats = [{ n: 1, title: '', created: Date.now(), at: Date.now() }];
+    out.current = 1;
+    writeBuilderState(id, out);
+  }
+  return out;
+}
+function writeBuilderState(id, st) {
+  fs.writeFileSync(path.join(builderDir(id), 'builder.json'), JSON.stringify(st, null, 2) + '\n');
+  return st;
+}
+/** Change the builder's record of an app: a patch of its fields (chats, current, comments, nextComment). */
+function patchBuilderState(id, patch) {
+  const st = readBuilderState(id);
+  const p = patch && typeof patch === 'object' ? patch : {};
+  if (Array.isArray(p.chats)) st.chats = p.chats.filter((c) => c && Number.isInteger(c.n)).map((c) => ({ n: c.n, title: String(c.title || '').slice(0, 80), created: Number(c.created) || Date.now(), at: Number(c.at) || Date.now() }));
+  if ('current' in p) st.current = Number.isInteger(p.current) ? p.current : null;
+  if (Array.isArray(p.comments)) st.comments = p.comments.slice(0, 200).map((c) => ({ ...c, text: String(c.text || '').slice(0, 4000) }));
+  if (Number.isInteger(p.nextComment)) st.nextComment = p.nextComment;
+  return writeBuilderState(id, st);
+}
+/** A new chat for an app: its number. */
+function newChat(id) {
+  const st = readBuilderState(id);
+  const n = Math.max(0, ...st.chats.map((c) => c.n)) + 1;
+  st.chats.push({ n, title: '', created: Date.now(), at: Date.now() });
+  st.current = n;
+  writeBuilderState(id, st);
+  return n;
+}
+function removeChat(id, n) {
+  const st = readBuilderState(id);
+  st.chats = st.chats.filter((c) => c.n !== n);
+  if (st.current === n) st.current = st.chats.at(-1)?.n ?? null;
+  writeBuilderState(id, st);
+  fs.rmSync(path.join(builderDir(id), 'chats', String(n)), { recursive: true, force: true });
+  return st;
+}
+
+// How much Claude asks in App Builder chats (Settings in App Builder; config.json "appbuilder.ask"). The levels
+// are wording in the builder's system prompt; "never" also takes the question tool away.
+const ASK_LEVELS = ['lots', 'some', 'rarely', 'never'];
+const ASK_PROMPTS = {
+  lots: `Ask a lot of questions. Before building anything new or making a significant change, ask with the AskUserQuestion tool: who uses the app, what they need to see and do first, which Leafdeck records it should use, what matters most, and how it should look. Ask 2 to 4 questions at a time with concrete options (and let them pick "you decide"). Confirm what you understood in a sentence, then build. While working, ask again whenever a choice would be hard to undo or you'd otherwise be guessing (which data, which permissions, a layout with several reasonable answers). Prefer asking to assuming.`,
+  some: `Ask when it matters. Use the AskUserQuestion tool when the request is ambiguous or a choice has consequences: which Leafdeck records to use, a new permission, a change of direction, or two equally good layouts. Ask 1 to 3 questions at a time with concrete options. Otherwise make a reasonable choice, say what you chose in a few words, and build.`,
+  rarely: `Rarely ask. Make sensible choices and state your assumptions in one line; use the AskUserQuestion tool only when you truly can't proceed (the request contradicts itself, or a permission the user must grant).`,
+  never: `Never ask questions. Make sensible choices, state your assumptions in one line, and build. If something's missing, make the most likely choice and mention it so the user can change it.`,
+};
+function builderPrompt(level) {
+  const ask = ASK_PROMPTS[level] || ASK_PROMPTS.some;
+  return `You are Claude working in Leafdeck's App Builder: the user is building a Leafdeck app with you, in this app's folder. App Builder shows the running app beside this chat and reloads it when you save. CLAUDE.md in this folder is the guide to the app API; follow its "Look native" section closely: the app must be indistinguishable from one of Leafdeck's built-in apps (controls in the title bar with leafdeck.toolbar.set, no page title, ld-* classes from /_leafdeck/app.css, sheets for forms, Leafdeck's icons, quiet surfaces).
+
+How to work:
+- ${ask}
+- BRIEF.md is the app's memory across conversations: what it's for, decisions made, what's done and what's next. Read it at the start of a conversation and keep it current as you go (short, in plain words; replace, don't append endlessly).
+- Keep replies short and plain (the chat renders simple Markdown): what you did and anything the user should look at or decide. No code in replies unless asked.
+- After a change, check the app yourself: leafdeck_app_open reloads it, leafdeck_screenshot shows it, leafdeck_app_logs has its errors. Fix what you see before you report.
+- Comments: the user can pin numbered comments on the running app (the message lists them with the element each one points at, and a screenshot with the pins is attached). Address each one and answer them by number ("1: done, …").
+- End every reply with three short suggestions for what to do next, one per line, in a fenced block with the language "suggestions" (nothing else in that block; keep each under 60 characters). App Builder shows them as buttons; they're never shown as text.`;
+}
+
+
+/* ---------------- The comment overlay in an app's preview (App Builder) ----------------
+   The Site Editor's in-page script (public/js/siteeditor/inpage.js) runs in the app's webview, in an isolated world:
+   select and comment modes, pins and threads. Its events come back through electron/app-preload.cjs to the UI
+   hosting the webview (public/js/userapps.js). */
+const PAGE_WORLD = 1011;
+let pageSrc = null;
+const pageScript = () => (pageSrc ??= fs.readFileSync(path.join(deps.publicDir, 'js', 'siteeditor', 'inpage.js'), 'utf8').replace(/^export default /m, ''));
+function page(wcId, mode, opts = {}) {
+  const { webContents } = require('electron');
+  const wc = webContents.fromId(Number(wcId));
+  if (!wc || wc.isDestroyed() || wc.getType() !== 'webview' || !isAppUrl(wc.getURL())) throw new Error('That app isn’t open');
+  return wc.executeJavaScriptInIsolatedWorld(PAGE_WORLD, [{ code: `(${pageScript()})(${JSON.stringify(String(mode))}, ${JSON.stringify(opts && typeof opts === 'object' ? opts : {})})` }], mode === 'start');
+}
+
 /* ---------------- Wiring ---------------- */
 
-function init({ protocolSession, win, onChange, builderConnection }) {
-  deps = { win, onChange, builderConnection };
-  protocolSession.protocol.handle(SCHEME, serve);
-  // Apps get no device permissions (camera, microphone, location…) in this prototype.
-  protocolSession.setPermissionRequestHandler((_wc, permission, cb) => cb(permission === 'clipboard-sanitized-write'));
-  protocolSession.setPermissionCheckHandler((_wc, permission) => permission === 'clipboard-sanitized-write');
+function init({ protocolSession, storeSession, win, onChange, builderConnection, publicDir }) {
+  deps = { win, onChange, builderConnection, storeSession, publicDir: publicDir || path.join(__dirname, '..', 'public') };
+  for (const [ses, forStore] of [[protocolSession, false], [storeSession, true]]) {
+    ses.protocol.handle(SCHEME, (request) => serve(request, forStore));
+    // Apps get no device permissions (camera, microphone, location…) in this prototype.
+    ses.setPermissionRequestHandler((_wc, permission, cb) => cb(permission === 'clipboard-sanitized-write'));
+    ses.setPermissionCheckHandler((_wc, permission) => permission === 'clipboard-sanitized-write');
+  }
   watch();
+}
+
+/**
+ * Content-Security-Policy can't stop WebRTC: Chromium ignores `webrtc 'block'`, and an app can always reach a fresh
+ * RTCPeerConnection through an about:blank iframe. So main.cjs turns off direct UDP on these webviews, which leaves TURN
+ * over TCP, and this sends that to a proxy that isn't there. `<-loopback>` includes this computer, which proxies skip
+ * by default. Only hosts that installed store apps declare go direct; each app's CSP still limits it to its own.
+ */
+function applyStoreNetwork() {
+  const direct = new Set(['fonts.googleapis.com', 'fonts.gstatic.com']);
+  for (const m of appStore.installed()) {
+    if (m.blocked) continue;
+    for (const p of m.permissions) {
+      if (p.startsWith('network:')) direct.add(p.slice(8));
+      if (p.startsWith('local:')) for (const host of ['127.0.0.1', 'localhost']) direct.add(`${host}:${p.slice(6)}`);
+    }
+  }
+  return deps.storeSession
+    .setProxy({ proxyRules: 'http://127.0.0.1:9', proxyBypassRules: ['<-loopback>', ...direct].join(',') })
+    .catch((err) => console.warn('[store] network rules:', err.message));
 }
 
 const isAppUrl = (u) => typeof u === 'string' && u.startsWith(`${SCHEME}://`);
@@ -632,7 +776,8 @@ const appIdOf = (u) => {
 const guideText = () => fs.readFileSync(path.join(SDK_DIR, 'GUIDE.md'), 'utf8');
 
 module.exports = {
-  PARTITION, SCHEME, COLLECTIONS, FIRST_PROMPT, init, list, create, readManifest, writeGuides, appsDir, appDir, attachLogs, getLogs,
+  PARTITION, STORE_PARTITION, SCHEME, COLLECTIONS, FIRST_PROMPT, init, applyStoreNetwork, list, create, customizeStoreApp, readManifest, writeGuides, appsDir, appDir, attachLogs, getLogs,
   saveVersion, versions, restoreVersion, remove, launchAgent, installAgent, agentStatus, isAppUrl, appIdOf, guideText, writeClaudeConfig, which,
+  chatDir, readBuilderState, patchBuilderState, newChat, removeChat, ASK_LEVELS, builderPrompt, page,
   openFolder: (id) => shell.openPath(id ? appDir(id) : (fs.mkdirSync(appsDir(), { recursive: true }), appsDir())),
 };

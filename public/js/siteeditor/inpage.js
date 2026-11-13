@@ -5,11 +5,20 @@
 //   sitePage('start', { mode, changes, comments, selected })  install (or update) the overlay, re-apply the pending
 //                                                              changes and draw the comment pins
 //   sitePage('mode', { mode })          'browse' (the page works as usual) | 'select' | 'comment'
-//   sitePage('info', { selector })      what the inspector shows for an element (tag, classes, text, computed styles)
+//   sitePage('info', { selector, props })  what the inspector shows for an element: tag, classes, text, computed styles
+//                                       (`styles` as shown, `base` without the editor's own style changes), its parent's
+//                                       layout, the path down to it, its children, and what its classes match
 //   sitePage('select', { selector })    select an element (from the Changes list), or null to deselect
-//   sitePage('apply', change)           show a change live: { id, kind: 'style' | 'text' | 'component', selector, ... }
+//   sitePage('apply', change)           show a change live: { id, kind: 'style' | 'text' | 'component', selector, ... }.
+//                                       Style changes are rules in the overlay's own stylesheet, so one can apply to
+//                                       everything a class matches (`target`), to a state (`state`: 'hover') or under
+//                                       a width (`media`: 'max-width: 768px'), and they outlive a framework re-render
+//   sitePage('hint', { kind, side })    show the selection's padding, margin or gap as bands ('padding', 'margin', 'gap';
+//                                       side 'top' | 'right' | 'bottom' | 'left' | 'all'), or nothing without a kind
 //   sitePage('revert', { id })          take it back
 //   sitePage('pins', { comments, active })  redraw the comment pins (and open one's thread)
+//   sitePage('vars')                    the page's custom properties: [{ name, value }]
+//   sitePage('widths')                  the page's breakpoints, from its media queries: ['max-width: 768px', …]
 //   sitePage('verify', { changes })     after Claude's turn and a reload: which changes the page now has on its own
 //   sitePage('quiet', { on })           hide the overlay's boxes for a screenshot (pins stay)
 //   sitePage('stop')                    revert everything and remove the overlay
@@ -21,6 +30,7 @@
 //   { t: 'comment', selector, offset, text, rect }   a new comment, pinned to an element
 //   { t: 'reply', id, text } { t: 'resolve', id } { t: 'pin', id }   on a comment's thread
 //   { t: 'designer', selector }    "Edit in Designer" from the selection's toolbar
+//   { t: 'key', key }              'undo' | 'redo' pressed on the page (Ctrl+Z, Ctrl+Shift+Z)
 export default function sitePage(mode, opts = {}) {
   const W = window;
   const D = document;
@@ -84,10 +94,28 @@ export default function sitePage(mode, opts = {}) {
 
   /* ---------------- what the inspector shows ---------------- */
 
-  const STYLE_PROPS = ['color', 'background-color', 'font-family', 'font-size', 'font-weight', 'line-height', 'letter-spacing', 'text-align', 'text-transform',
-    'padding-top', 'padding-right', 'padding-bottom', 'padding-left', 'margin-top', 'margin-right', 'margin-bottom', 'margin-left',
-    'border-top-left-radius', 'border-top-right-radius', 'border-bottom-right-radius', 'border-bottom-left-radius',
-    'border-top-width', 'border-top-style', 'border-top-color', 'box-shadow', 'width', 'height', 'gap', 'opacity', 'display'];
+  const SIDES = ['top', 'right', 'bottom', 'left'];
+  const CORNERS = ['top-left', 'top-right', 'bottom-right', 'bottom-left'];
+  const STYLE_PROPS = [
+    // layout
+    'display', 'flex-direction', 'flex-wrap', 'justify-content', 'align-items', 'align-content', 'justify-items', 'gap', 'row-gap', 'column-gap',
+    'grid-template-columns', 'grid-template-rows', 'grid-auto-flow', 'grid-auto-columns', 'grid-auto-rows',
+    'flex-grow', 'flex-shrink', 'flex-basis', 'align-self', 'justify-self', 'order', 'grid-column', 'grid-row',
+    // size and position
+    'width', 'height', 'min-width', 'min-height', 'max-width', 'max-height', 'overflow-x', 'overflow-y', 'aspect-ratio', 'box-sizing', 'object-fit', 'object-position',
+    'position', 'top', 'right', 'bottom', 'left', 'z-index', 'float', 'clear',
+    ...SIDES.map((x) => `padding-${x}`), ...SIDES.map((x) => `margin-${x}`),
+    // type
+    'color', 'font-family', 'font-size', 'font-weight', 'font-style', 'line-height', 'letter-spacing', 'word-spacing', 'text-align', 'text-transform', 'text-decoration-line',
+    'text-decoration-color', 'text-decoration-style', 'text-underline-offset', 'white-space', 'text-overflow', 'text-indent', 'word-break', 'overflow-wrap', 'text-wrap', 'text-shadow',
+    'vertical-align', 'list-style-type',
+    // backgrounds and borders
+    'background-color', 'background-image', 'background-size', 'background-position', 'background-repeat', 'background-clip', 'background-attachment',
+    ...CORNERS.map((x) => `border-${x}-radius`), ...SIDES.flatMap((x) => [`border-${x}-width`, `border-${x}-style`, `border-${x}-color`]),
+    'outline-width', 'outline-style', 'outline-color', 'outline-offset',
+    // effects
+    'box-shadow', 'opacity', 'mix-blend-mode', 'filter', 'backdrop-filter', 'transform', 'transform-origin', 'transition', 'cursor', 'pointer-events', 'visibility',
+  ];
   // Text that can be edited in place: 'plain' (no tags inside) or 'inline' (only links, bold, spans… inside, kept
   // while editing); null for anything with blocks or nothing to edit.
   const INLINE = /^(a|b|i|em|strong|span|code|small|br|sup|sub|mark|u|s|abbr|time|kbd|q|cite|del|ins|wbr|label|font)$/i;
@@ -112,16 +140,95 @@ export default function sitePage(mode, opts = {}) {
     const cls = classesOf(el);
     return el.tagName.toLowerCase() + (el.id && !DYNAMIC.test(el.id) ? '#' + el.id : cls.length ? '.' + cls[0] : '');
   };
-  function info(el) {
-    if (!el) return null;
+  const inFlow = (el) => {
     const cs = getComputedStyle(el);
-    const styles = {};
-    for (const p of STYLE_PROPS) styles[p] = cs.getPropertyValue(p);
-    const r = el.getBoundingClientRect();
+    return cs.display !== 'none' && cs.position !== 'absolute' && cs.position !== 'fixed';
+  };
+  /**
+   * Run `fn` with the page's transitions off: a value that just changed reads as where it ends up, not where its
+   * transition starts. (A second stylesheet of the overlay's, off except in here.)
+   */
+  function settled(S, fn) {
+    if (!S) return fn();
+    if (!S.still || !S.still.isConnected) {
+      S.still = D.createElement('style');
+      S.still.setAttribute('data-ld-overlay', '');
+      S.still.textContent = '*, *::before, *::after { transition: none !important; }';
+      (D.head || D.documentElement).append(S.still);
+    }
+    const sheet = S.still.sheet;
+    const flush = () => void getComputedStyle(D.documentElement).opacity;
+    sheet.disabled = false;
+    flush();
+    try {
+      return fn();
+    } finally {
+      flush();
+      sheet.disabled = true;
+      flush();
+    }
+  }
+  function info(el, extra = null) {
+    if (!el) return null;
+    const S = W[KEY];
+    const more = Array.isArray(extra) ? extra : S?.extra || [];
+    const props = [...new Set([...STYLE_PROPS, ...more.filter((p) => typeof p === 'string' && /^-?-?[a-z][a-z0-9-]*$/i.test(p)).slice(0, 120)])];
+    // `styles` is how it looks now; `base` how the project has it (the editor's own style rules off).
+    const sheet = S?.style?.isConnected ? S.style.sheet : null;
+    const ours = !!sheet && sheet.cssRules.length > 0;
+    const read = (list) => {
+      const cs = getComputedStyle(el);
+      const out = {};
+      for (const p of list) out[p] = cs.getPropertyValue(p).trim();
+      return out;
+    };
+    const without = (fn) => {
+      if (!ours) return fn();
+      sheet.disabled = true;
+      try {
+        return fn();
+      } finally {
+        sheet.disabled = false;
+      }
+    };
+    const moving = props.filter((p) => /^transition/.test(p)); // read as they are: `settled` turns them off
+    const rest = props.filter((p) => !/^transition/.test(p));
+    const styles = read(moving);
+    const base = without(() => read(moving));
+    let r = null;
+    settled(S, () => {
+      Object.assign(styles, read(rest));
+      r = el.getBoundingClientRect();
+      Object.assign(base, ours ? without(() => read(rest)) : read(rest));
+    });
     const text = (el.textContent || '').replace(/\s+/g, ' ').trim();
+    const sel = cssPath(el);
+    // The parent's layout: what "fill" and "hug" mean for this element, and whether it has a place in a flex or grid.
+    const par = el.parentElement;
+    const pcs = par ? getComputedStyle(par) : null;
+    const path = [];
+    for (let e = el.parentElement; e && e !== D.documentElement && path.length < 24; e = e.parentElement) path.unshift({ label: label(e), selector: cssPath(e) });
+    const kids = [...el.children].filter((c) => !c.hasAttribute('data-ld-overlay') && !/^(script|style|link|meta|template|noscript)$/i.test(c.tagName));
+    const nth = (c) => {
+      const same = [...el.children].filter((x) => x.tagName === c.tagName);
+      return `${sel} > ${c.tagName.toLowerCase()}${same.length > 1 ? `:nth-of-type(${same.indexOf(c) + 1})` : ''}`;
+    };
+    // How its children sit now: side by side or stacked (what "Add auto layout" keeps).
+    const flowKids = kids.filter(inFlow).slice(0, 6).map((c) => c.getBoundingClientRect()).filter((b) => b.width && b.height);
+    let flow = 'column';
+    if (flowKids.length > 1 && flowKids.slice(1).every((b, i) => b.left >= flowKids[i].right - 1)) flow = 'row';
+    const count = (q) => {
+      try {
+        return D.querySelectorAll(q).length;
+      } catch {
+        return 0;
+      }
+    };
+    const tag = el.tagName.toLowerCase();
+    const targets = [...classesOf(el).map((c) => '.' + cssEsc(c)), tag].map((q) => ({ selector: q, count: count(q) })).filter((t) => t.count > 0);
     return {
-      selector: cssPath(el),
-      tag: el.tagName.toLowerCase(),
+      selector: sel,
+      tag,
       id: el.id || '',
       classes: classesOf(el),
       label: label(el),
@@ -132,6 +239,14 @@ export default function sitePage(mode, opts = {}) {
       rect: { x: round(r.left), y: round(r.top), w: round(r.width), h: round(r.height) },
       html: el.outerHTML.slice(0, 4000),
       styles,
+      base,
+      parent: pcs ? { label: label(par), display: pcs.display, direction: pcs.flexDirection, wrap: pcs.flexWrap, alignItems: pcs.alignItems } : null,
+      path,
+      children: kids.slice(0, 60).map((c) => ({ label: label(c), selector: nth(c), text: (c.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 40) })),
+      childCount: kids.length,
+      flow,
+      targets,
+      viewport: { w: W.innerWidth, h: W.innerHeight },
     };
   }
 
@@ -173,10 +288,14 @@ export default function sitePage(mode, opts = {}) {
     .row button { all: initial; font: 600 12px system-ui, sans-serif; cursor: pointer; padding: 6px 11px; border-radius: 7px; color: #fff; background: rgba(255,255,255,0.1); }
     .row button.pri { background: #0d99ff; }
     .row button:hover { filter: brightness(1.12); }
-    .bar { left: 50%; bottom: 18px; transform: translateX(-50%); background: rgba(29, 31, 35, 0.94); padding: 9px 14px; border-radius: 10px; font-weight: 500; box-shadow: 0 8px 30px rgba(0,0,0,0.35); white-space: nowrap; }
+    .bar { left: 50%; bottom: 18px; transform: translateX(-50%); background: rgba(29, 31, 35, 0.94); padding: 9px 14px; border-radius: 10px; font-weight: 500; box-shadow: 0 8px 30px rgba(0,0,0,0.35); width: max-content; max-width: calc(100vw - 24px); text-align: center; line-height: 1.7; }
     .bar b { color: #7cc4ff; font-weight: 600; }
     .bar kbd { font: inherit; background: rgba(255,255,255,0.14); border-radius: 4px; padding: 1px 6px; margin: 0 2px; }
     .ed { border: 2px solid #ff9f0a; border-radius: 2px; }
+    .band { position: fixed; box-sizing: border-box; }
+    .band.padding { background: rgba(48, 209, 88, 0.38); }
+    .band.margin { background: rgba(255, 159, 10, 0.4); }
+    .band.gap { background: repeating-linear-gradient(-45deg, rgba(255, 55, 150, 0.6) 0 1.5px, rgba(255, 55, 150, 0.16) 1.5px 6px); }
   `;
 
   function install() {
@@ -188,9 +307,9 @@ export default function sitePage(mode, opts = {}) {
     const sh = host.attachShadow({ mode: 'closed' });
     sh.innerHTML = `<style>${CSS_TEXT}</style>
       <div class="box hover" hidden><div class="pad"></div><span class="tag"></span></div>
-      <div class="box sel" hidden><span class="tag"></span><span class="tools"><button data-act="edit-text" hidden>Edit text</button><button data-act="designer">Edit in Designer</button></span></div>
+      <div class="box sel" hidden><span class="tag"></span><span class="tools"><button data-act="edit-text" hidden>Edit text</button><button data-act="comment" hidden>Comment</button><button data-act="designer">Edit in Designer</button></span></div>
       <div class="box ed" hidden></div>
-      <div class="chgs"></div><div class="pins"></div>
+      <div class="chgs"></div><div class="hints"></div><div class="pins"></div>
       <div class="pop" hidden></div>
       <div class="bar" hidden></div>`;
     (D.documentElement || D.body).append(host);
@@ -198,6 +317,9 @@ export default function sitePage(mode, opts = {}) {
       host, sh, mode: 'browse',
       hover: null, selected: null, editing: null,
       changes: new Map(), // id -> { change, el, orig }
+      style: null, // the <style> the style changes are rules of
+      hint: null, // { kind, side }: the selection's padding, margin or gap, shown as bands
+      extra: [], // properties the inspector wants besides STYLE_PROPS
       comments: [], active: null, draft: null, // draft: { el, offset, x, y }
       quiet: false,
       $: (s) => sh.querySelector(s),
@@ -257,7 +379,53 @@ export default function sitePage(mode, opts = {}) {
         chgs.append(b);
       }
     }
+    const hints = S.$('.hints');
+    hints.innerHTML = '';
+    if (!S.quiet && S.hint && S.selected?.isConnected && !S.editing) drawHint(S, hints);
     drawPins(S);
+  }
+
+  /** The selection's padding (inside), margin (outside) or the gaps between its children, as colored bands. */
+  function drawHint(S, into) {
+    const el = S.selected;
+    const { kind, side = 'all' } = S.hint;
+    const r = rectOf(el);
+    const cs = getComputedStyle(el);
+    const n = (p) => parseFloat(cs.getPropertyValue(p)) || 0;
+    const want = (x) => side === 'all' || side === x || (side === 'x' && (x === 'left' || x === 'right')) || (side === 'y' && (x === 'top' || x === 'bottom'));
+    const band = (x, y, w, h) => {
+      if (!(w > 0 && h > 0)) return;
+      const b = D.createElement('div');
+      b.className = 'band ' + kind;
+      Object.assign(b.style, { left: x + 'px', top: y + 'px', width: w + 'px', height: h + 'px' });
+      into.append(b);
+    };
+    if (kind === 'padding') {
+      const b = SIDES.map((x) => n(`border-${x}-width`));
+      const p = SIDES.map((x) => n(`padding-${x}`));
+      const x = r.left + b[3];
+      const y = r.top + b[0];
+      const w = r.width - b[3] - b[1];
+      const h = r.height - b[0] - b[2];
+      if (want('top')) band(x, y, w, p[0]);
+      if (want('bottom')) band(x, y + h - p[2], w, p[2]);
+      if (want('left')) band(x, y + p[0], p[3], h - p[0] - p[2]);
+      if (want('right')) band(x + w - p[1], y + p[0], p[1], h - p[0] - p[2]);
+    } else if (kind === 'margin') {
+      const m = SIDES.map((x) => n(`margin-${x}`));
+      if (want('top')) band(r.left, r.top - m[0], r.width, m[0]);
+      if (want('bottom')) band(r.left, r.bottom, r.width, m[2]);
+      if (want('left')) band(r.left - m[3], r.top, m[3], r.height);
+      if (want('right')) band(r.right, r.top, m[1], r.height);
+    } else if (kind === 'gap') {
+      const kids = [...el.children].filter((c) => !c.hasAttribute('data-ld-overlay') && inFlow(c)).map(rectOf).filter((b) => b.width || b.height);
+      for (let i = 0; i + 1 < kids.length; i++) {
+        const a = kids[i];
+        const b = kids[i + 1];
+        if (b.left >= a.right - 0.5) band(a.right, Math.min(a.top, b.top), b.left - a.right, Math.max(a.bottom, b.bottom) - Math.min(a.top, b.top));
+        else if (b.top >= a.bottom - 0.5) band(Math.min(a.left, b.left), a.bottom, Math.max(a.right, b.right) - Math.min(a.left, b.left), b.top - a.bottom);
+      }
+    }
   }
 
   function drawPins(S) {
@@ -493,6 +661,10 @@ export default function sitePage(mode, opts = {}) {
         return;
       }
       if (S.mode === 'browse') return;
+      if (S.undoKeys && (e.ctrlKey || e.metaKey) && !e.altKey && /^[zy]$/i.test(e.key)) {
+        block(e);
+        return emit({ t: 'key', key: e.shiftKey || /y/i.test(e.key) ? 'redo' : 'undo' });
+      }
       if (e.key === 'Escape') {
         block(e);
         if (!S.$('.pop').hidden) return closePop(S);
@@ -531,6 +703,7 @@ export default function sitePage(mode, opts = {}) {
     try {
       let t = null;
       mo = new MutationObserver(() => {
+        if (S.style && !S.style.isConnected) writeStyles(S); // a framework re-rendered <head>
         clearTimeout(t);
         t = setTimeout(redraw, 60);
       });
@@ -557,6 +730,10 @@ export default function sitePage(mode, opts = {}) {
       const ta = pop.querySelector('textarea');
       if (act === 'close' || act === 'cancel') return closePop(S);
       if (act === 'designer' && S.selected) return emit({ t: 'designer', selector: cssPath(S.selected) });
+      if (act === 'comment' && S.selected) {
+        const r = S.selected.getBoundingClientRect();
+        return startDraft(S, r.left + Math.min(r.width, 24), r.top + Math.min(r.height / 2, 24), S.selected);
+      }
       if (act === 'edit-text' && S.selected) return startEdit(S, S.selected);
       if (act === 'post' && S.draft) {
         const text = (ta?.value || '').trim();
@@ -582,18 +759,67 @@ export default function sitePage(mode, opts = {}) {
 
   /* ---------------- changes shown live ---------------- */
 
+  // Style changes are rules in a stylesheet of the overlay's own: `target` (the element's own selector unless the
+  // change is for everything a class or tag matches), `state` (':hover'…) and `media` ('max-width: 768px'). Each is
+  // !important and a notch more specific than anything the page has, so it shows whatever the page's CSS says; the
+  // marker in the selector is also how the main process tells these rules from the page's.
+  const STATES = ['hover', 'focus', 'focus-visible', 'focus-within', 'active'];
+  const MARK = ':not(#ld-site-editor):not(#ld-site-editor)';
+  const mediaOf = (c) => (/^(max|min)-width: \d+(\.\d+)?px$/.test(c.media || '') ? c.media : '');
+  const stateOf = (c) => (STATES.includes(c.state) ? c.state : '');
+  const validSel = (q) => {
+    try {
+      D.querySelector(q);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  function writeStyles(S) {
+    const list = [...S.changes.values()].map((e) => e.change).filter((c) => c.kind === 'style' && Object.keys(c.props || {}).length);
+    if (!list.length) {
+      S.style?.remove();
+      S.style = null;
+      return;
+    }
+    if (!S.style || !S.style.isConnected) {
+      S.style = D.createElement('style');
+      S.style.setAttribute('data-ld-overlay', '');
+      (D.head || D.documentElement).append(S.style);
+    }
+    const sheet = S.style.sheet;
+    while (sheet.cssRules.length) sheet.deleteRule(0);
+    // Later wins among equals: plain rules, then states, then widths (desktop-first: narrower max-widths later;
+    // mobile-first: wider min-widths later).
+    const order = (c) => {
+      const m = mediaOf(c);
+      const w = m ? parseFloat(m.split(': ')[1]) : 0;
+      return (m ? (m.startsWith('max') ? 2e6 - w : 4e6 + w) : 0) + (stateOf(c) ? 0.5 : 0);
+    };
+    for (const c of list.sort((a, b) => order(a) - order(b))) {
+      const q = c.target && validSel(c.target) ? c.target : c.selector;
+      if (!validSel(q)) continue;
+      const st = stateOf(c);
+      const sel = `:is(${q})${st ? ':' + st : ''}${MARK}`;
+      const m = mediaOf(c);
+      try {
+        const i = sheet.insertRule(m ? `@media (${m}) { ${sel} {} }` : `${sel} {}`, sheet.cssRules.length);
+        const rule = m ? sheet.cssRules[i].cssRules[0] : sheet.cssRules[i];
+        for (const [prop, v] of Object.entries(c.props)) if (v.after !== '' && v.after != null) rule.style.setProperty(prop, String(v.after).replace(/\s*!important\s*$/i, ''), 'important');
+      } catch {}
+    }
+  }
+
   function apply(S, change) {
     revert(S, change.id, { keep: true });
-    const el = find(change.selector);
+    const el = find(change.selector) || (change.kind === 'style' && change.target ? find(change.target) : null);
     if (!el) return { ok: false, error: 'Element not found' };
     const entry = { change, el, orig: {} };
     if (change.kind === 'style') {
-      entry.orig.style = {};
-      for (const [prop, v] of Object.entries(change.props || {})) {
-        entry.orig.style[prop] = [el.style.getPropertyValue(prop), el.style.getPropertyPriority(prop)];
-        if (v.after === '' || v.after == null) el.style.removeProperty(prop);
-        else el.style.setProperty(prop, v.after);
-      }
+      S.changes.set(change.id, entry);
+      writeStyles(S);
+      draw(S);
+      return { ok: true };
     } else if (change.kind === 'text') {
       entry.orig.html = el.innerHTML;
       if (change.rich && change.afterHtml != null) el.innerHTML = cleanHtml(change.afterHtml);
@@ -622,23 +848,28 @@ export default function sitePage(mode, opts = {}) {
     const entry = S.changes.get(id);
     if (!entry) return;
     const { change, el, orig } = entry;
-    if (change.kind === 'style' && el) for (const [prop, [v, pri]] of Object.entries(orig.style || {})) v ? el.style.setProperty(prop, v, pri) : el.style.removeProperty(prop);
-    else if (change.kind === 'text' && el) el.innerHTML = orig.html;
+    S.changes.delete(id);
+    if (change.kind === 'style') {
+      if (!keep) writeStyles(S);
+    } else if (change.kind === 'text' && el) el.innerHTML = orig.html;
     else if (change.kind === 'component') {
       if (el?.isConnected && orig.node) el.replaceWith(orig.node);
       orig.style?.remove();
       if (S.selected === el) S.selected = orig.node;
     }
-    S.changes.delete(id);
     if (!keep) draw(S);
   }
 
-  /** Does the page, as served now, have each change? (Run after Claude's turn and a reload, before anything's re-applied.) */
+  /**
+   * Does the page, as served now, have each change? (Run after Claude's turn and a reload, before anything's
+   * re-applied.) A style change is in the page when setting it on the element makes no difference anymore; one for a
+   * state, or for a width the page isn't at, can't be told from here ('unknown').
+   */
   function verify(changes) {
     const out = {};
-    const probe = D.createElement('div');
-    probe.style.cssText = 'position:absolute;left:-9999px;top:0;visibility:hidden';
-    D.body.append(probe);
+    const still = D.createElement('style');
+    still.textContent = '*, *::before, *::after { transition: none !important; }';
+    (D.head || D.documentElement).append(still);
     try {
       for (const c of changes) {
         const el = find(c.selector);
@@ -648,22 +879,68 @@ export default function sitePage(mode, opts = {}) {
         }
         if (c.kind === 'text') out[c.id] = (el.textContent || '').replace(/\s+/g, ' ').trim() === String(c.after || '').replace(/\s+/g, ' ').trim() || (!!c.afterHtml && normHtml(el.innerHTML) === normHtml(c.afterHtml));
         else if (c.kind === 'style') {
+          if (stateOf(c) || (mediaOf(c) && !W.matchMedia(`(${mediaOf(c)})`).matches)) {
+            out[c.id] = 'unknown';
+            continue;
+          }
           const cs = getComputedStyle(el);
-          const parent = el.parentElement || D.body;
-          out[c.id] = Object.entries(c.props || {}).every(([prop, v]) => {
-            parent.append(probe);
-            probe.style.cssText = 'position:absolute;left:-9999px;top:0;visibility:hidden';
-            probe.style.setProperty(prop, v.after);
-            const want = getComputedStyle(probe).getPropertyValue(prop);
-            const have = cs.getPropertyValue(prop);
-            return have === want || have.replace(/\s/g, '') === String(v.after).replace(/\s/g, '');
-          });
+          const props = Object.entries(c.props || {}).filter(([, v]) => v.after !== '' && v.after != null);
+          const have = props.map(([prop]) => cs.getPropertyValue(prop));
+          const was = el.getAttribute('style');
+          for (const [prop, v] of props) el.style.setProperty(prop, String(v.after), 'important');
+          const want = props.map(([prop]) => cs.getPropertyValue(prop));
+          if (was == null) el.removeAttribute('style');
+          else el.setAttribute('style', was);
+          out[c.id] = props.every(([, v], i) => have[i] === want[i] || have[i].replace(/\s/g, '') === String(v.after).replace(/\s/g, ''));
         } else if (c.kind === 'component') out[c.id] = c.before ? el.outerHTML.slice(0, 4000) !== c.before : 'unknown';
       }
     } finally {
-      probe.remove();
+      still.remove();
     }
     return out;
+  }
+
+  /** The page's custom properties (from :root and html rules): what a color or a size can be set to by name. */
+  function vars() {
+    const names = new Set();
+    const walk = (rules) => {
+      for (const r of rules || []) {
+        if (r.cssRules && !r.selectorText) walk(r.cssRules); // @media, @layer, @supports
+        if (!r.selectorText || !/(^|,)\s*(:root|html|body)\b/.test(r.selectorText)) continue;
+        for (const name of r.style) if (name.startsWith('--')) names.add(name);
+      }
+    };
+    for (const sheet of D.styleSheets) {
+      try {
+        walk(sheet.cssRules);
+      } catch {} // another origin's stylesheet
+    }
+    const cs = getComputedStyle(D.body || D.documentElement);
+    return [...names].slice(0, 400).map((name) => ({ name, value: cs.getPropertyValue(name).trim().slice(0, 120) })).filter((v) => v.value);
+  }
+
+  /** The widths the page's own media queries turn on (its breakpoints), as 'max-width: 768px' / 'min-width: 1024px'. */
+  function widths() {
+    const out = new Set();
+    const add = (kind, n, unit) => {
+      const v = Math.round(parseFloat(n) * (unit === 'px' ? 1 : 16));
+      if (v > 0) out.add(`${kind}-width: ${v}px`);
+    };
+    const walk = (rules) => {
+      for (const r of rules || []) {
+        const q = r.media?.mediaText || '';
+        for (const m of q.matchAll(/\((max|min)-width:\s*([\d.]+)(px|em|rem)\)/g)) add(m[1], m[2], m[3]);
+        for (const m of q.matchAll(/\(\s*width\s*(<|>)=?\s*([\d.]+)(px|em|rem)\s*\)/g)) add(m[1] === '<' ? 'max' : 'min', m[2], m[3]);
+        if (r.cssRules) walk(r.cssRules);
+      }
+    };
+    for (const sheet of D.styleSheets) {
+      try {
+        walk(sheet.cssRules);
+      } catch {} // another origin's stylesheet
+    }
+    const n = (s) => parseFloat(s.split(': ')[1]);
+    return [...out].sort((a, b) => (a[1] === b[1] ? (a[1] === 'a' ? n(b) - n(a) : n(a) - n(b)) : a[1] === 'a' ? -1 : 1)).slice(0, 16);
   }
 
   /* ---------------- the entry point ---------------- */
@@ -673,19 +950,33 @@ export default function sitePage(mode, opts = {}) {
     if (!S) return true;
     if (S.editing) endEdit(S, false);
     for (const id of [...S.changes.keys()]) revert(S, id, { keep: true });
+    S.style?.remove();
+    S.still?.remove();
     S.off?.();
     S.host.remove();
     delete W[KEY];
     return true;
   }
   if (mode === 'verify') return verify(Array.isArray(opts.changes) ? opts.changes : []);
-  if (mode === 'info') return info(find(opts.selector));
+  if (mode === 'info') {
+    if (W[KEY] && Array.isArray(opts.props)) W[KEY].extra = opts.props;
+    return info(find(opts.selector), opts.props);
+  }
+  if (mode === 'vars') return vars();
+  if (mode === 'widths') return widths();
 
   const S = install();
   if (mode === 'start') {
     if (opts.mode) S.mode = opts.mode;
+    // App Builder uses the overlay without Designer: the selection's toolbar then offers a comment instead.
+    S.$('[data-act="designer"]').hidden = opts.designer === false;
+    S.$('[data-act="comment"]').hidden = opts.designer !== false;
     for (const id of [...S.changes.keys()]) revert(S, id, { keep: true });
+    writeStyles(S);
     for (const c of opts.changes || []) if (c.status !== 'applied') apply(S, c);
+    if (Array.isArray(opts.props)) S.extra = opts.props;
+    S.undoKeys = !!opts.undo; // the Site Editor undoes changes itself; elsewhere Ctrl+Z stays the page's
+    S.hint = null;
     S.comments = Array.isArray(opts.comments) ? opts.comments : [];
     if (opts.selected) S.selected = find(opts.selected);
     showBar(S);
@@ -723,6 +1014,11 @@ export default function sitePage(mode, opts = {}) {
     return info(p);
   }
   if (mode === 'apply') return apply(S, opts);
+  if (mode === 'hint') {
+    S.hint = ['padding', 'margin', 'gap'].includes(opts.kind) ? { kind: opts.kind, side: opts.side || 'all' } : null;
+    draw(S);
+    return true;
+  }
   if (mode === 'revert') return revert(S, opts.id), true;
   if (mode === 'pins') {
     S.comments = Array.isArray(opts.comments) ? opts.comments : S.comments;

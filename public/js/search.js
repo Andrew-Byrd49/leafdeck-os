@@ -1,7 +1,7 @@
 import { store } from './store.js';
 import { $, $$, esc } from './util.js';
 import { icon, appIcon } from './icons.js';
-import { getApp, openApp, toast, recentWindows, wins, activeWindow, screens } from './wm.js';
+import { registry, getApp, openApp, toast, recentWindows, wins, activeWindow, screens } from './wm.js';
 import { schemas, COLLECTIONS, recordMatches } from './schemas.js';
 import { linkAppId } from './apps/system.js';
 import { openBookmark, favicon } from './apps/bookmarks.js';

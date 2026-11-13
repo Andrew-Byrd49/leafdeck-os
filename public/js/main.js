@@ -43,6 +43,7 @@ import './apps/imageeditor.js';
 import './apps/editor.js';
 import './apps/devtools.js';
 import './apps/appdisplay.js';
+import './apps/store.js';
 import './apps/designer.js';
 import './apps/siteeditor.js';
 import { isScreenPage, refreshInfo, perScreen, screensInfo, SCREEN } from './screens.js';

@@ -65,6 +65,10 @@ ipcRenderer.on('leafapp:event', (_e, { type, detail }) => {
   }
 });
 
+// App Builder's comment overlay (public/js/siteeditor/inpage.js, run in this page's isolated world by
+// electron/userapps.cjs) reports what the user did as a DOM event; it goes to the Leafdeck UI hosting this app.
+document.addEventListener('leafdeck-site-editor', (e) => typeof e.detail === 'string' && e.detail.length < 256 * 1024 && ipcRenderer.sendToHost('leafapp:page', e.detail), true);
+
 function call(method, ...args) {
   return new Promise((resolve, reject) => {
     const id = ++seq;

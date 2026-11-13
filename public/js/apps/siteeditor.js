@@ -1,18 +1,20 @@
 // Site Editor: a site in development (a Claude Code project, at its local dev address) in a webview, with a hands-on
-// layer over it. Select an element and adjust it in a short inspector (text, type, color, spacing, radius, shadow),
-// edit text in place, pin comments on the page, and send it all to Claude, which works in the project's folder and
-// puts the changes into the source. After its turn the page reloads and each change is checked against the page;
+// layer over it. Select any element and change its CSS in the inspector (siteeditor/inspector.js: auto layout, size,
+// position, spacing, type, backgrounds, borders, effects, any other property), for that element or everything with its
+// class, in a state (:hover) or at some widths only; edit text in place, pin comments on the page, and send it all to
+// Claude, which works in the project's folder and puts the changes into the source. After its turn the page reloads and each change is checked against the page;
 // Claude's answers to comments thread under their pins. "Edit in Designer" takes an element to Leafdeck Designer and
 // "Send back to site" brings the redesigned component here as a change.
 // The page half is public/js/siteeditor/inpage.js (injected by electron/siteeditor.cjs, which also finds where styles
 // come from over CDP and keeps the state and hand-off in the profile, outside the project).
 import { esc, $, uid, debounce } from '../util.js';
 import { icon } from '../icons.js';
-import { registerApp, openApp, wins, toast, showMenu, focus, closeMenu } from '../wm.js';
+import { registerApp, openApp, wins, toast, showMenu, focus, closeMenu, activeWindow } from '../wm.js';
 import { shell } from '../shell.js';
 import { createChat, listen } from '../agentchat.js';
 import { confirmDialog, ask } from '../dialogs.js';
-import { pickColor } from '../colorpicker.js';
+import { glyph } from '../designer/glyphs.js';
+import { createInspector } from '../siteeditor/inspector.js';
 import { pickFiles } from '../filepicker.js';
 
 const supported = !!shell?.siteEditor && !!shell?.projects && !!shell?.agentChat;
@@ -45,20 +47,6 @@ const pageOf = (u) => {
   }
 };
 const short = (s, n = 60) => (String(s || '').length > n ? String(s).slice(0, n - 1) + '…' : String(s || ''));
-const px = (v) => {
-  const m = /^(-?\d*\.?\d+)px$/.exec(String(v || '').trim());
-  return m ? String(Math.round(parseFloat(m[1]) * 100) / 100) : String(v || '');
-};
-const toPx = (v) => (/^-?\d*\.?\d+$/.test(String(v).trim()) ? `${String(v).trim()}px` : String(v).trim());
-function toHex(c) {
-  const m = /^rgba?\(\s*(\d+)[,\s]+(\d+)[,\s]+(\d+)(?:[,\s/]+([\d.]+%?))?\s*\)$/.exec(String(c || '').trim());
-  if (!m) return /^#/.test(c) ? c : '';
-  const h = (n) => Number(n).toString(16).padStart(2, '0');
-  let a = m[4] == null ? 1 : m[4].endsWith('%') ? parseFloat(m[4]) / 100 : parseFloat(m[4]);
-  return `#${h(m[1])}${h(m[2])}${h(m[3])}${a < 1 ? h(Math.round(a * 255)) : ''}`;
-}
-const transparent = (c) => /^rgba\(\s*\d+[,\s]+\d+[,\s]+\d+[,\s/]+0\s*\)$/.test(String(c || '').trim()) || c === 'transparent';
-
 /* ---------------- state per project (electron/siteeditor.cjs keeps it in the profile) ---------------- */
 
 const blank = () => ({ v: 1, url: '', changes: [], comments: [], next: { change: 1, comment: 1 } });
@@ -131,6 +119,17 @@ const app = {
     let server = { status: 'stopped', url: '', log: '', detected: null }; // the project's dev server (electron/siteserver.cjs)
     let logOpen = false; // the output drawer, opened by the user (it also opens while starting and when it fails)
     const startedHere = new Set(); // projects whose server this window started: stopped when it closes
+    let scope = { target: '', state: '', media: '' }; // what the inspector's styles apply to: a class, a state, some widths
+    let declared = null; // the selection's values as the project's CSS has them (electron/siteeditor.cjs inspect)
+    let rules = null; // the page's rules for it, when the inspector's list is open
+    let inspSeq = 0;
+    let pageVars = []; // the page's custom properties
+    let pageBreaks = []; // its breakpoints ('max-width: 768px'), and the widths the user asked for
+    const customBreaks = [];
+    let viewW = 0; // the page's width while it's narrowed (0: all the room there is)
+    const undoStack = [];
+    const redoStack = [];
+    let liveOpen = false; // a drag is changing a value: one step to undo, however far it goes
 
     win.body.innerHTML = `<div class="se">
       <div class="se-top">
@@ -139,6 +138,9 @@ const app = {
         <button class="tb-btn" data-se="reload" title="Reload">${icon('refresh', 15)}</button>
         <button class="tb-btn se-srv" data-se="server" title="Dev server">${icon('play', 14)}<i></i></button>
         <form class="se-url"><input type="text" spellcheck="false" placeholder="http://localhost:5173/" aria-label="Address"></form>
+        <button class="tb-btn se-width" data-se="width" title="Page width: see it, and style it, as a tablet or a phone has it">${icon('display', 14)}<b></b></button>
+        <button class="tb-btn se-undo" data-se="undo" title="Undo (Ctrl+Z)">${glyph('undo', 15)}</button>
+        <button class="tb-btn se-undo" data-se="redo" title="Redo (Ctrl+Shift+Z)">${glyph('redo', 15)}</button>
         <span class="se-modes" role="group" aria-label="Mode">
           <button type="button" data-mode="browse" title="Browse: the page works as usual">${icon('globe', 13)} Browse</button>
           <button type="button" data-mode="select" title="Select: click an element to adjust it (S)">${icon('target', 13)} Select</button>
@@ -197,9 +199,10 @@ const app = {
         unlisten = null;
         $('.se-pane-claude', win.body).replaceChildren();
       }
+      if (pid !== id) undoStack.length = redoStack.length = 0;
       pid = id;
       store.set('siteeditor:project', pid);
-      selected = null;
+      pick(null);
       activeComment = null;
       state = pid ? await loadState(pid) : null;
       server = { status: 'stopped', url: '', log: '', detected: null };
@@ -284,9 +287,11 @@ const app = {
         state.url = u;
         urlInput.value = u;
         page = pageOf(u);
-        selected = null;
+        pick(null);
         save();
         start();
+        run('vars').then((v) => (pageVars = Array.isArray(v) ? v : []));
+        run('widths').then((w) => (pageBreaks = [...new Set([...(Array.isArray(w) ? w : []), ...customBreaks])]));
       };
       view.addEventListener('did-finish-load', () => loaded(view.getURL()));
       view.addEventListener('did-navigate-in-page', (e) => e.isMainFrame && loaded(e.url));
@@ -309,8 +314,9 @@ const app = {
         verifyNext = false;
         await verifyChanges();
       }
-      const r = await run('start', { mode, changes: pageChanges().filter(pending), comments: pageComments(), selected: selected?.selector || null });
+      const r = await run('start', { mode, changes: pageChanges().filter(pending), comments: pageComments(), selected: selected?.selector || null, props: extraProps(), undo: true });
       if (r?.title) title = r.title;
+      if (selected && scope.state) shell.siteEditor.forceState(wcId, selected.selector, scope.state).catch(() => {}); // a reload let go of it
       drawAll();
     }
 
@@ -452,6 +458,9 @@ const app = {
       const send = $('.se-send', win.body);
       send.disabled = !p || !n;
       send.querySelector('span').textContent = n ? `Send to Claude (${n})` : 'Send to Claude';
+      const wb = $('.se-width', win.body);
+      wb.classList.toggle('on', !!viewW);
+      wb.querySelector('b').textContent = viewW ? String(viewW) : '';
     }
     const lastIsClaude = (c) => c.replies?.length && c.replies.at(-1).from === 'claude';
 
@@ -484,121 +493,211 @@ const app = {
       else if (tab === 'comments') drawComments();
     }
 
-    /* ----- the inspector: a short one ----- */
+    /* ----- the inspector (siteeditor/inspector.js draws it and reads its fields; the changes are kept here) ----- */
 
-    const WEIGHTS = [['100', 'Thin'], ['200', 'Extra light'], ['300', 'Light'], ['400', 'Regular'], ['500', 'Medium'], ['600', 'Semibold'], ['700', 'Bold'], ['800', 'Extra bold'], ['900', 'Black']];
+    const sameScope = (c) => (c.target || '') === scope.target && (c.state || '') === scope.state && (c.media || '') === scope.media;
+    /** The pending style change the inspector is working on: the selection's (or its class's), in the scope chosen. */
+    const styleChange = () => (selected && (state?.changes || []).find((c) => c.page === page && c.kind === 'style' && pending(c) && sameScope(c) && (scope.target || c.selector === selected.selector))) || null;
+    /** Every pending style change that reaches the selection, whatever its scope. */
+    const reaching = () => (selected ? (state?.changes || []).filter((c) => c.page === page && c.kind === 'style' && pending(c) && (c.target ? (selected.targets || []).some((t) => t.selector === c.target) : c.selector === selected.selector)) : []);
+    const extraProps = () => [...new Set(reaching().flatMap((c) => Object.keys(c.props || {})))];
+    const rulesOpen = () => store.get('siteeditor:inspector', {}).closed?.rules === false;
+
+    /** A new selection (or none): its scope starts over, and what the project's CSS says about it is read. */
+    function pick(inf) {
+      const same = !!inf && inf.selector === selected?.selector;
+      selected = inf || null;
+      if (same) return;
+      declared = null;
+      rules = null;
+      inspSeq++;
+      if (scope.state && wcId) shell.siteEditor.forceState(wcId, null, '').catch(() => {});
+      scope = { target: '', state: '', media: scope.media };
+      if (selected) readDeclared();
+    }
+    async function readDeclared(withRules = rulesOpen()) {
+      const sel = selected?.selector;
+      if (!sel || !wcId) return;
+      const seq = ++inspSeq;
+      const r = await shell.siteEditor.inspect(wcId, sel, { props: [...new Set([...Object.keys(selected.styles), ...extraProps()])], state: scope.state, rules: withRules }).catch(() => null);
+      if (seq !== inspSeq || selected?.selector !== sel) return;
+      declared = r?.props || {};
+      if (withRules) rules = r?.rules || [];
+      if (tab === 'edit') drawInspector();
+    }
+    /** The selection as the page has it now (after a change, a resize, a state). */
+    async function refreshSelected() {
+      const sel = selected?.selector;
+      if (sel) {
+        const inf = await run('info', { selector: sel, props: extraProps() });
+        if (inf && selected?.selector === sel) selected = inf;
+      }
+      drawAll();
+    }
+    async function setScope(patch) {
+      if (!selected) return;
+      if (patch.media === 'custom') {
+        const r = await ask({ title: 'Style it at some widths only', message: 'What you set will apply only while the page is that wide: a media query in the project’s CSS.', fields: [{ name: 'w', label: 'Width in pixels', type: 'number', value: String(viewW || 768) }], buttons: [{ label: 'Cancel', value: null }, { label: 'This Width and Wider', value: 'min' }, { label: 'This Width and Narrower', value: 'max', primary: true }], win });
+        const w = Math.round(parseFloat(r?.values?.w));
+        if (!r || !(w > 0)) return drawInspector();
+        patch = { media: `${r.button}-width: ${w}px` };
+        if (!customBreaks.includes(patch.media)) customBreaks.push(patch.media);
+        if (!pageBreaks.includes(patch.media)) pageBreaks.push(patch.media);
+      }
+      const sel = selected.selector;
+      Object.assign(scope, patch);
+      if ('state' in patch && wcId) await shell.siteEditor.forceState(wcId, scope.state ? sel : null, scope.state).catch(() => false);
+      if (selected?.selector !== sel) return;
+      if ('state' in patch) {
+        declared = null;
+        rules = null;
+        readDeclared();
+      }
+      refreshSelected();
+    }
+    const inspector = createInspector(pane('edit'), {
+      setProps: (props, o) => setProps(props, o),
+      setScope: (patch) => setScope(patch),
+      select: async (selector) => {
+        const inf = await run('select', { selector });
+        if (!inf) return;
+        pick(inf);
+        drawAll();
+      },
+      hint: (kind, side) => run('hint', { kind, side }),
+      wantRules: () => readDeclared(true),
+    });
     function drawInspector() {
       const host = pane('edit');
-      if (!pid) return (host.innerHTML = `<div class="se-empty"><p>Choose a project to start.</p></div>`);
-      if (!selected) {
-        host.innerHTML = `<div class="se-empty">${icon('target', 26)}<p>${mode === 'select' ? 'Click an element on the page to adjust it. Double-click text to edit it in place.' : 'Switch to <b>Select</b> and click an element to adjust it.'}</p>
+      if (!pid || !selected) {
+        inspector.clear();
+        host.innerHTML = !pid
+          ? `<div class="se-empty"><p>Choose a project to start.</p></div>`
+          : `<div class="se-empty">${icon('target', 26)}<p>${mode === 'select' ? 'Click anything on the page to change its layout, size, spacing, type, colors and the rest of its CSS. Double-click text to edit it in place.' : 'Switch to <b>Select</b> and click an element to change it.'}</p>
           <p class="se-hint">Changes show on the page right away and go to Claude when you send them; nothing in the project changes until then.</p></div>`;
         return;
       }
-      const s = selected.styles;
-      const cur = (prop) => changeFor(selected.selector, 'style')?.props?.[prop]?.after ?? s[prop];
-      const num = (prop, label, title = '') => `<label class="dzi-num" title="${esc(title || prop)}"><span class="dzi-l">${label}</span><input type="text" data-prop="${prop}" value="${esc(px(cur(prop)))}"></label>`;
-      const text = (prop, placeholder = '') => `<input class="dzi-text" type="text" data-prop="${prop}" value="${esc(cur(prop))}" placeholder="${esc(placeholder)}" spellcheck="false">`;
-      const color = (prop) => {
-        const v = cur(prop);
-        const none = transparent(v) || v === '' || v === 'none';
-        return `<span class="dzi-color"><button type="button" class="dzi-swatch" data-swatch="${prop}" style="--c:${esc(none ? 'transparent' : v)}" title="Pick a color"></button><input type="text" data-prop="${prop}" value="${esc(none ? '' : toHex(v) || v)}" placeholder="${none ? 'none' : ''}" spellcheck="false"></span>`;
-      };
-      const radii = ['border-top-left-radius', 'border-top-right-radius', 'border-bottom-right-radius', 'border-bottom-left-radius'];
-      const sameRadius = radii.every((r) => cur(r) === cur(radii[0]));
-      const textChange = changeFor(selected.selector, 'text');
-      const ch = changeFor(selected.selector, 'style');
-      host.innerHTML = `<div class="se-insp">
-        <div class="se-el"><b>${esc(selected.label)}</b><small title="${esc(selected.selector)}">${esc(short(selected.selector, 70))}</small>
-          <span class="se-el-size">${Math.round(selected.rect.w)} × ${Math.round(selected.rect.h)}</span></div>
-        <div class="se-el-actions">
-          <button type="button" class="btn small" data-se="designer">${icon('pen', 12)} Edit in Designer</button>
-          <button type="button" class="btn small" data-se="comment-here">${icon('pin', 12)} Comment</button>
-          <button type="button" class="btn small" data-se="parent" title="Select the parent (↑)">${icon('up', 12)}</button>
-          ${ch || textChange ? `<button type="button" class="btn small" data-se="revert-sel" title="Take back this element’s changes">${icon('refresh', 12)} Revert</button>` : ''}
-        </div>
-        ${selected.textKind === 'plain'
-          ? `<section class="dzi-sec"><div class="dzi-head">Text</div><div class="dzi-body"><textarea class="se-text" data-text rows="3" spellcheck="true">${esc(textChange?.after ?? selected.text)}</textarea>
-              <p class="dzi-note">Or double-click it on the page (Enter when it’s selected) to edit it in place.</p></div></section>`
-          : selected.textKind === 'inline'
-            ? `<section class="dzi-sec"><div class="dzi-head">Text</div><div class="dzi-body"><p class="se-textprev">${esc(short(textChange?.after ?? selected.text, 220))}</p>
-              <div class="dzi-row"><button type="button" class="btn small" data-se="edit-text">${icon('pen', 12)} Edit text on the page</button></div>
-              <p class="dzi-note">It has links or formatting inside, so it’s edited in place to keep them (double-click it, or Enter).</p></div></section>`
-            : ''}
-        <section class="dzi-sec"><div class="dzi-head">Type</div><div class="dzi-body">
-          <div class="dzi-row">${text('font-family', 'Font family')}</div>
-          <div class="dzi-row">${num('font-size', 'Aa', 'Font size')}<select class="dzi-select" data-prop="font-weight">${WEIGHTS.map(([v, l]) => `<option value="${v}"${String(cur('font-weight')) === v || (cur('font-weight') === 'normal' && v === '400') || (cur('font-weight') === 'bold' && v === '700') ? ' selected' : ''}>${l}</option>`).join('')}</select></div>
-          <div class="dzi-row">${num('line-height', '↕', 'Line height')}${num('letter-spacing', 'AV', 'Letter spacing')}</div>
-          <div class="dzi-row"><span class="dzi-seg" data-seg="text-align">${['left', 'center', 'right'].map((a) => `<button type="button" data-val="${a}" class="${cur('text-align') === a || (a === 'left' && cur('text-align') === 'start') ? 'on' : ''}" title="Align ${a}">${a[0].toUpperCase()}</button>`).join('')}</span>
-            <span class="dzi-seg" data-seg="text-transform">${[['none', '–'], ['uppercase', 'AA'], ['capitalize', 'Aa']].map(([a, l]) => `<button type="button" data-val="${a}" class="${cur('text-transform') === a ? 'on' : ''}">${l}</button>`).join('')}</span></div>
-          <div class="dzi-row"><span class="dzi-l">Color</span>${color('color')}</div>
-        </div></section>
-        <section class="dzi-sec"><div class="dzi-head">Fill</div><div class="dzi-body">
-          <div class="dzi-row">${color('background-color')}</div>
-        </div></section>
-        <section class="dzi-sec"><div class="dzi-head">Spacing</div><div class="dzi-body">
-          <div class="dzi-row"><span class="dzi-l" title="Padding">Pad</span>${num('padding-top', 'T')}${num('padding-right', 'R')}${num('padding-bottom', 'B')}${num('padding-left', 'L')}</div>
-          <div class="dzi-row"><span class="dzi-l" title="Margin">Mar</span>${num('margin-top', 'T')}${num('margin-right', 'R')}${num('margin-bottom', 'B')}${num('margin-left', 'L')}</div>
-          <div class="dzi-row"><span class="dzi-l" title="Gap (flex and grid)">Gap</span>${num('gap', '', 'Gap')}<span class="dzi-l">W</span>${text('width')}<span class="dzi-l">H</span>${text('height')}</div>
-        </div></section>
-        <section class="dzi-sec"><div class="dzi-head">Border</div><div class="dzi-body">
-          ${sameRadius
-            ? `<div class="dzi-row"><span class="dzi-l" title="Corner radius">${icon('crop', 12)}</span><label class="dzi-num"><input type="text" data-radius="all" value="${esc(px(cur(radii[0])))}"></label><button type="button" class="dzi-icon" data-se="radius-split" title="Each corner">${icon('grid', 12)}</button></div>`
-            : `<div class="dzi-row">${radii.map((r, i) => num(r, ['TL', 'TR', 'BR', 'BL'][i]))}</div>`}
-          <div class="dzi-row">${num('border-top-width', 'W', 'Border width')}<select class="dzi-select" data-prop="border-top-style">${['none', 'solid', 'dashed', 'dotted'].map((v) => `<option${cur('border-top-style') === v ? ' selected' : ''}>${v}</option>`).join('')}</select>${color('border-top-color')}</div>
-          <p class="dzi-note">Width, style and color set all four sides.</p>
-        </div></section>
-        <section class="dzi-sec"><div class="dzi-head">Effects</div><div class="dzi-body">
-          <div class="dzi-row"><span class="dzi-l">Shadow</span>${text('box-shadow', 'none')}</div>
-          <div class="dzi-row"><span class="dzi-l">Opacity</span><label class="dzi-num"><input type="text" data-prop="opacity" value="${esc(cur('opacity'))}"></label></div>
-        </div></section>
-        ${ch ? `<section class="dzi-sec"><div class="dzi-head">This element’s changes</div><div class="dzi-body">${changeSummary(ch)}</div></section>` : ''}
-      </div>`;
+      const ch = styleChange();
+      const others = new Set(reaching().filter((c) => c !== ch && (!c.state || c.state === scope.state)).flatMap((c) => Object.keys(c.props || {})));
+      inspector.draw({ selected, declared, rules, change: ch, textChange: changeFor(selected.selector, 'text'), scope, vars: pageVars, breaks: pageBreaks, others });
     }
-    function changeSummary(ch) {
-      if (ch.kind === 'text') return `<p class="dzi-note">Text: “${esc(short(ch.before, 40))}” → “${esc(short(ch.after, 40))}”</p>`;
-      if (ch.kind === 'component') return `<p class="dzi-note">Component from Designer${ch.design?.name ? `: ${esc(ch.design.name)}` : ''}</p>`;
-      return `<dl class="dzi-keys">${Object.entries(ch.props || {}).map(([p, v]) => `<dt>${esc(p)}</dt><dd><s>${esc(short(v.before, 24))}</s> ${esc(short(v.after, 28))}${ch.origins?.[p] ? `<small title="${esc(originText(ch.origins[p]))}"> · ${esc(ch.origins[p].file ? short(ch.origins[p].file.split('/').pop(), 24) + (ch.origins[p].line ? ':' + ch.origins[p].line : '') : ch.origins[p].selector)}</small>` : ''}</dd>`).join('')}</dl>`;
+
+    /* ----- the page's width ----- */
+
+    const WIDTHS = [[0, 'All the Room There Is'], [1024, 'Small Laptop · 1024'], [768, 'Tablet · 768'], [390, 'Phone · 390']];
+    /** The media query a narrowed page stands for: the page's own breakpoint that covers it, when it has one. */
+    function mediaFor(w) {
+      if (!w) return '';
+      const own = pageBreaks.filter((m) => /^max-width: /.test(m)).map((m) => parseFloat(m.slice(11))).filter((n) => n >= w).sort((a, b) => a - b)[0];
+      return `max-width: ${own || (w <= 480 ? 480 : w)}px`;
     }
-    const originText = (o) => `${o.selector}${o.inherited ? ` (inherited from ${o.inherited})` : ''}${o.file ? ` in ${o.file}${o.line ? ':' + o.line : ''}` : o.url ? ` in ${o.url}` : ''}`;
+    function setWidth(w) {
+      viewW = w ? Math.min(3000, Math.max(240, Math.round(w))) : 0;
+      pageEl.classList.toggle('sized', !!viewW);
+      pageEl.style.setProperty('--se-w', `${viewW}px`);
+      scope.media = mediaFor(viewW); // what's set at a phone's width is for that width, until "All widths" is chosen
+      drawTop();
+      // The page lays out again at the new width: read the selection once it has.
+      setTimeout(() => {
+        if (selected) readDeclared();
+        refreshSelected();
+      }, 260);
+    }
+    function widthMenu(anchor) {
+      const r = anchor.getBoundingClientRect();
+      const own = [...new Set(pageBreaks.map((m) => parseFloat(m.split(': ')[1])).filter((n) => n >= 240))].sort((a, b) => b - a).slice(0, 8);
+      showMenu(r.left, r.bottom + 4, [
+        ...WIDTHS.map(([w, label]) => ({ label, checked: viewW === w, act: () => setWidth(w) })),
+        ...(own.length ? ['-', { header: 'This page’s breakpoints' }, ...own.map((w) => ({ label: `${w} px`, checked: viewW === w, act: () => setWidth(w) }))] : []),
+        '-',
+        {
+          label: 'Another Width…',
+          act: async () => {
+            const a = await ask({ title: 'Page width', fields: [{ name: 'w', label: 'Width in pixels', type: 'number', value: String(viewW || 600) }], win });
+            const w = parseFloat(a?.values?.w);
+            if (a && w > 0) setWidth(w);
+          },
+        },
+      ]);
+    }
+
+    /* ----- undo ----- */
+
+    const snap = () => JSON.stringify(state.changes);
+    /** Before a change to the changes: a step to come back to. */
+    function remember() {
+      if (!state) return;
+      const s = snap();
+      if (undoStack.at(-1) !== s) undoStack.push(s);
+      if (undoStack.length > 200) undoStack.shift();
+      redoStack.length = 0;
+    }
+    async function travel(from, to) {
+      if (!state) return;
+      const now = snap();
+      let s = from.pop();
+      while (s !== undefined && s === now) s = from.pop();
+      if (s === undefined) return;
+      to.push(now);
+      state.changes = JSON.parse(s);
+      liveOpen = false;
+      save();
+      await start(); // the page takes the changes as they are now
+      await refreshSelected();
+    }
+    const undo = () => travel(undoStack, redoStack);
+    const redo = () => travel(redoStack, undoStack);
 
     /* ----- changes ----- */
 
     const changeFor = (selector, kind) => (state?.changes || []).find((c) => c.page === page && c.selector === selector && c.kind === kind && pending(c)) || null;
-    function setProps(props) {
+    /** Set properties on the selection, in the scope chosen: { property: value }, null to take one back. `live`: a drag
+        or a color being picked, shown on the page while the inspector's fields stay as they are. */
+    function setProps(props, { live = false } = {}) {
       if (!selected || !state) return;
       const sel = selected.selector;
-      let ch = changeFor(sel, 'style');
+      let ch = styleChange();
+      if (!ch && Object.values(props).every((v) => v == null || v === '')) return live ? null : drawAll();
+      if (!liveOpen) remember();
+      liveOpen = live;
       if (!ch) {
         ch = { id: uid(), n: state.next.change++, kind: 'style', page, selector: sel, label: selected.label, html: selected.html.slice(0, 1200), props: {}, origins: {}, status: 'pending', created: Date.now() };
+        if (scope.target) ch.target = scope.target;
+        if (scope.state) ch.state = scope.state;
+        if (scope.media) ch.media = scope.media;
         state.changes.push(ch);
       }
       const fresh = [];
       for (const [prop, value] of Object.entries(props)) {
-        const before = selected.styles[prop] ?? '';
-        if (!ch.props[prop]) {
+        const had = ch.props[prop];
+        const before = had ? had.before : (selected.base?.[prop] ?? selected.styles[prop] ?? '');
+        const written = !scope.target && declared?.[prop] && !declared[prop].inherited ? declared[prop].value : null;
+        // Taken back, or back to how the project has it: not a change anymore.
+        if (value == null || value === '' || value === before || value === written) {
+          delete ch.props[prop];
+          delete ch.origins[prop];
+        } else if (had) had.after = value;
+        else {
           ch.props[prop] = { before, after: value };
-          fresh.push(prop);
-        } else ch.props[prop].after = value;
-        // Back to how it was: not a change anymore.
-        if (value === before || (value === '' && !before)) delete ch.props[prop];
-      }
-      ch.status = 'pending';
-      if (!Object.keys(ch.props).length) {
-        state.changes = state.changes.filter((c) => c !== ch);
-        run('revert', { id: ch.id });
-      } else {
-        run('apply', ch);
-        if (fresh.length) {
-          shell.siteEditor.origins(wcId, sel, fresh).then((o) => {
-            Object.assign(ch.origins, o || {});
-            save();
-            if (tab === 'edit' && selected?.selector === sel) drawInspector();
-          }, () => {});
+          if (declared?.[prop]) ch.origins[prop] = declared[prop];
+          else fresh.push(prop);
         }
       }
+      ch.status = 'pending';
+      const gone = !Object.keys(ch.props).length;
+      if (gone) state.changes = state.changes.filter((c) => c !== ch);
+      const shown = gone ? run('revert', { id: ch.id }) : run('apply', ch);
+      if (fresh.length && !gone && wcId) {
+        shell.siteEditor.inspect(wcId, sel, { props: fresh, state: scope.state }).then((r) => {
+          Object.assign(ch.origins, r?.props || {});
+          save();
+          if (tab === 'edit' && selected?.selector === sel) drawInspector();
+        }, () => {});
+      }
       save();
+      if (live) return;
       drawAll();
+      shown.then(refreshSelected); // what else moved with it (a width when the display changed)
     }
     /** A text edit: { after } from the inspector's box, or the page's { after, rich, beforeHtml, afterHtml } (in-place, formatting kept). */
     function setText({ after, rich = false, beforeHtml = null, afterHtml = null }) {
@@ -607,6 +706,7 @@ const app = {
       const sel = selected.selector;
       let ch = changeFor(sel, 'text');
       const before = ch?.before ?? selected.text;
+      remember();
       const same = rich ? (afterHtml || '').replace(/\s+/g, ' ').trim() === (ch?.beforeHtml ?? beforeHtml ?? selected.inner ?? '').replace(/\s+/g, ' ').trim() : after.trim() === before.trim();
       if (same) {
         if (ch) {
@@ -627,6 +727,7 @@ const app = {
       drawAll();
     }
     function removeChange(ch) {
+      remember();
       state.changes = state.changes.filter((c) => c !== ch);
       if (ch.page === page) run('revert', { id: ch.id });
       save();
@@ -636,7 +737,8 @@ const app = {
       const host = pane('changes');
       const list = state?.changes || [];
       if (!list.length) return (host.innerHTML = `<div class="se-empty">${icon('sliders', 26)}<p>No changes yet. Select an element and adjust it, edit text in place, or send a component here from Designer.</p></div>`);
-      const kindOf = (c) => (c.kind === 'text' ? 'Text' : c.kind === 'component' ? 'Component' : Object.keys(c.props || {}).join(', '));
+      const scopeOf = (c) => [c.target && `every ${c.target}`, c.state && `:${c.state}`, c.media && c.media.replace('max-width: ', '≤ ').replace('min-width: ', '≥ ')].filter(Boolean).join(' · ');
+      const kindOf = (c) => (c.kind === 'text' ? 'Text' : c.kind === 'component' ? 'Component' : [scopeOf(c), Object.keys(c.props || {}).join(', ')].filter(Boolean).join(': '));
       const status = (c) => ({ pending: '', sent: 'Sent', applied: 'Applied', missing: 'Not applied' })[c.status] || '';
       host.innerHTML = `<div class="se-list">
         ${list.map((c) => `<div class="se-item${c.status === 'applied' ? ' done' : c.status === 'missing' ? ' miss' : ''}${selected && c.selector === selected.selector && c.page === page ? ' on' : ''}" data-change="${c.id}" role="button" tabindex="0">
@@ -742,13 +844,18 @@ const app = {
         for (const c of changes) {
           const where = c.page !== page ? ` (on ${c.page})` : '';
           if (c.kind === 'style') {
-            md.push(`### Change ${c.n} · ${c.label} — styles${where}`, '', `Element: \`${c.selector}\``, '', '```html', c.html || '', '```', '');
+            md.push(`### Change ${c.n} · ${c.label} — styles${where}`, '', `Element: \`${c.selector}\``, '');
+            if (c.target) md.push(`Applies to: every element matching \`${c.target}\`, not only this one. Change the rule for \`${c.target}\` (the element here is the one that was selected).`, '');
+            if (c.state) md.push(`State: \`:${c.state}\` only. These are its styles in that state (“before” is how that state looks now); leave its resting styles alone.`, '');
+            if (c.media) md.push(`Widths: only under \`@media (${c.media})\`. Leave it as it is at other widths.`, '');
+            md.push('```html', c.html || '', '```', '');
             for (const [prop, v] of Object.entries(c.props || {})) {
               const o = c.origins?.[prop];
               let src = 'no rule found for it (the browser default, or set by a script)';
               if (o) {
                 src = `set by \`${o.selector} { ${o.text} }\``;
                 if (o.inherited) src += ` (inherited from ${o.inherited})`;
+                if (o.media) src += ` under \`@media ${o.media}\``;
                 if (o.file) src += ` in \`${o.file}${o.line ? ':' + o.line : ''}\``;
                 else if (o.url) src += ` in ${o.url}${o.line ? ' line ' + o.line : ''}`;
                 if (o.injected) src += ' (a stylesheet injected by a script)';
@@ -782,6 +889,7 @@ const app = {
       files['spec.md'] = md.join('\n');
       await shell.siteEditor.handoff(pid, files);
       for (const c of changes) if (c.status === 'pending' || c.status === 'missing') c.status = 'sent';
+      undoStack.length = redoStack.length = 0; // what's sent is with Claude now
       for (const c of comments) if (c.status === 'open') c.status = 'sent';
       save();
       drawAll();
@@ -862,13 +970,14 @@ const app = {
     /* ----- what the page reports ----- */
 
     function onPageEvent(ev) {
+      if (ev.t === 'key') return ev.key === 'redo' ? redo() : undo();
       if (ev.t === 'select') {
-        selected = ev.info || null;
+        pick(ev.info || null);
         if (selected && tab !== 'edit' && tab !== 'claude') setTab('edit');
         else drawPane();
         drawTop();
         // Read it again with the pointer off it: the resting look, not :hover's.
-        if (selected) run('info', { selector: selected.selector, rest: selected.rect }).then((inf) => {
+        if (selected) run('info', { selector: selected.selector, rest: selected.rect, props: extraProps() }).then((inf) => {
           if (inf && selected?.selector === inf.selector) {
             selected = inf;
             if (tab === 'edit') drawInspector();
@@ -878,6 +987,7 @@ const app = {
         const edit = { after: ev.after, rich: !!ev.rich, beforeHtml: ev.beforeHtml ?? null, afterHtml: ev.afterHtml ?? null };
         if (!selected || selected.selector !== ev.selector) run('info', { selector: ev.selector }).then((inf) => {
           if (!inf) return;
+          pick(inf);
           selected = { ...inf, text: ev.before, inner: ev.beforeHtml ?? inf.inner };
           setText(edit);
         });
@@ -941,20 +1051,6 @@ const app = {
       if (modeBtn) return setMode(modeBtn.dataset.mode);
       const tabBtn = t.closest('[data-tab]');
       if (tabBtn) return setTab(tabBtn.dataset.tab);
-      const sw = t.closest('[data-swatch]');
-      if (sw) {
-        const prop = sw.dataset.swatch;
-        const r = sw.getBoundingClientRect();
-        const input = sw.parentElement.querySelector('input');
-        pickColor(r.left, r.bottom + 6, { value: toHex(selected?.styles[prop]) || input.value || '#000000', title: prop === 'color' ? 'Text color' : prop === 'background-color' ? 'Background' : 'Border color', onChange: (v) => { input.value = v; setProps({ [prop]: v }); } });
-        return;
-      }
-      const seg = t.closest('[data-seg] [data-val]');
-      if (seg) {
-        const prop = seg.closest('[data-seg]').dataset.seg;
-        setProps({ [prop]: seg.dataset.val });
-        return drawInspector();
-      }
       const rc = t.closest('[data-remove-change]');
       if (rc) {
         const ch = state.changes.find((c) => c.id === rc.dataset.removeChange);
@@ -974,7 +1070,16 @@ const app = {
         if (!ch) return;
         if (ch.page !== page) return navigate(ch.page);
         const inf = await run('select', { selector: ch.selector });
-        selected = inf || null;
+        pick(inf);
+        // Its scope too, so the inspector shows this change's values.
+        if (inf && ch.kind === 'style') {
+          scope = { target: ch.target || '', state: ch.state || '', media: ch.media || '' };
+          if (scope.state) {
+            await shell.siteEditor.forceState(wcId, inf.selector, scope.state).catch(() => false);
+            readDeclared();
+            return refreshSelected();
+          }
+        }
         drawAll();
         return;
       }
@@ -1003,6 +1108,9 @@ const app = {
       if (act === 'back') return wv?.canGoBack?.() && wv.goBack();
       if (act === 'reload') return wv ? wv.reload() : state?.url && navigate(state.url);
       if (act === 'side') return toggleSide();
+      if (act === 'undo') return undo();
+      if (act === 'redo') return redo();
+      if (act === 'width') return widthMenu(t.closest('[data-se]'));
       if (act === 'send') return sendToClaude();
       if (act === 'designer' && selected) return editInDesigner(selected.selector);
       if (act === 'edit-text' && selected) {
@@ -1013,7 +1121,7 @@ const app = {
       if (act === 'parent' && selected) {
         const up = await run('parent', { selector: selected.selector });
         if (up) {
-          selected = up;
+          pick(up);
           drawAll();
         }
         return;
@@ -1024,17 +1132,13 @@ const app = {
         return;
       }
       if (act === 'revert-sel' && selected) {
-        for (const ch of state.changes.filter((c) => c.page === page && c.selector === selected.selector && pending(c))) removeChange(ch);
-        const inf = await run('info', { selector: selected.selector });
-        if (inf) selected = inf;
-        return drawAll();
-      }
-      if (act === 'radius-split') {
-        const host = pane('edit');
-        const radii = ['border-top-left-radius', 'border-top-right-radius', 'border-bottom-right-radius', 'border-bottom-left-radius'];
-        const row = host.querySelector('[data-radius]')?.closest('.dzi-row');
-        if (row) row.outerHTML = `<div class="dzi-row">${radii.map((r, i) => `<label class="dzi-num"><span class="dzi-l">${['TL', 'TR', 'BR', 'BL'][i]}</span><input type="text" data-prop="${r}" value="${esc(px(changeFor(selected.selector, 'style')?.props?.[r]?.after ?? selected.styles[r]))}"></label>`).join('')}</div>`;
-        return;
+        remember();
+        for (const ch of state.changes.filter((c) => c.page === page && c.selector === selected.selector && pending(c))) {
+          state.changes = state.changes.filter((c) => c !== ch);
+          run('revert', { id: ch.id });
+        }
+        save();
+        return refreshSelected();
       }
       if (act === 'clear-applied') {
         state.changes = state.changes.filter((c) => c.status !== 'applied');
@@ -1043,10 +1147,11 @@ const app = {
       }
       if (act === 'discard-all') {
         if (!(await confirmDialog('Discard every change? The page goes back to how the project has it.', { ok: 'Discard', danger: true, win }))) return;
+        remember();
         for (const ch of [...state.changes]) if (ch.page === page) run('revert', { id: ch.id });
         state.changes = [];
         save();
-        return drawAll();
+        return refreshSelected();
       }
       if (act === 'clear-resolved') {
         state.comments = state.comments.filter((c) => c.status !== 'resolved');
@@ -1057,23 +1162,6 @@ const app = {
     });
     win.body.addEventListener('change', (e) => {
       const t = e.target;
-      if (t.matches('[data-prop]')) {
-        const prop = t.dataset.prop;
-        let v = t.value.trim();
-        const numeric = /^(font-size|line-height|letter-spacing|padding-|margin-|gap|border-top-width|border-.*-radius|width|height)/.test(prop) && prop !== 'line-height';
-        if (numeric && v !== '') v = toPx(v);
-        if (prop === 'line-height' && /^\d*\.?\d+$/.test(v) && parseFloat(v) > 4) v += 'px';
-        if (prop === 'border-top-width' || prop === 'border-top-style' || prop === 'border-top-color') {
-          const side = prop.replace('border-top-', '');
-          return setProps(Object.fromEntries(['top', 'right', 'bottom', 'left'].map((s) => [`border-${s}-${side}`, v])));
-        }
-        if (prop === 'gap') return setProps({ 'row-gap': v, 'column-gap': v });
-        return setProps({ [prop]: v });
-      }
-      if (t.matches('[data-radius="all"]')) {
-        const v = t.value.trim() === '' ? '' : toPx(t.value);
-        return setProps(Object.fromEntries(['border-top-left-radius', 'border-top-right-radius', 'border-bottom-right-radius', 'border-bottom-left-radius'].map((r) => [r, v])));
-      }
       if (t.matches('[data-text]')) {
         run('revert', { id: 'live-text' }); // the preview while typing; the real change follows
         return setText({ after: t.value });
@@ -1091,8 +1179,22 @@ const app = {
       if (f.matches('.se-start-srv')) return startServer(f.querySelector('input').value.trim());
       if (f.matches('.se-start-url')) return navigate(f.querySelector('input').value.trim());
     });
+    // Undo and redo. After a click on something that takes no focus the keyboard is on the document, not in the
+    // window, so this listens there and answers when the window is the one in front.
+    const onUndoKey = (e) => {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey || !/^[zy]$/i.test(e.key) || e.defaultPrevented) return;
+      const t = e.target;
+      if (t === document.body || t === document.documentElement) { if (activeWindow() !== win) return; }
+      else if (!win.el.contains(t)) return;
+      // In a field with something typed, the field's own undo; anywhere else, the last change.
+      else if (t.matches('textarea, [contenteditable]') || (t.matches('input') && (!t.closest('.se-pane[data-pane="edit"]') || t.value !== t.defaultValue))) return;
+      e.preventDefault();
+      if (e.shiftKey || /y/i.test(e.key)) redo();
+      else undo();
+    };
+    document.addEventListener('keydown', onUndoKey);
     win.body.addEventListener('keydown', (e) => {
-      if (e.target.matches('input, textarea, select, [contenteditable]')) return;
+      if (e.target.matches('input, textarea, select, [contenteditable]') || e.ctrlKey || e.metaKey || e.altKey) return;
       if (e.key === 's' || e.key === 'S') setMode('select');
       else if (e.key === 'c' || e.key === 'C') setMode('comment');
       else if (e.key === 'b' || e.key === 'B') setMode('browse');
@@ -1117,6 +1219,8 @@ const app = {
         for (const id of startedHere) shell.siteEditor.server.stop(id).catch(() => {});
         unlisten?.();
         run('stop');
+        inspector.destroy();
+        document.removeEventListener('keydown', onUndoKey);
         chat?.destroy();
       },
     };

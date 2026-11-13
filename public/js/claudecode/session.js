@@ -255,7 +255,10 @@ export function attachments({ root, box, ta, cwd, folder, mention }) {
 /**
  * ctx: { cwd(): the folder it works in, files(): paths for "@", openFile(path), openUrl(url), newSession(),
  *        changed(): something may have changed on disk (the Changes panel refreshes), onActivity(state),
- *        folderName() and folderMenu(button): the folder chip, shown until the first message }
+ *        folderName() and folderMenu(button): the folder chip, shown until the first message,
+ *        transform(text, final, replay): what to show of Claude's text (final: the whole reply is in),
+ *        empty(): { title, text, starters } for the empty chat,
+ *        beforeSend(text): async; may return { text, images } to send instead of / along with the message }
  * Returns { el, focus(), destroy(), send(text), setDraft(text), attach(list), isEmpty(), takeDraft(), giveDraft(d) }.
  */
 export function createSession(id, ctx = {}) {
@@ -327,9 +330,12 @@ export function createSession(id, ctx = {}) {
 
   function empty() {
     if (logEl.children.length) return drawFolder();
-    add(`<img class="cl-logo" src="/img/claude-code.svg" alt="" draggable="false"><h3>What should we work on?</h3>
-      <p>Claude Code works in <b>${esc(ctx.cwdLabel?.() || 'this folder')}</b> with your settings, CLAUDE.md and skills.</p>
-      <div class="ccs-sugg">${['Explain how this project is laid out', 'Review my uncommitted changes', 'Find and fix a bug', 'Write tests for the code I changed'].map((s) => `<button type="button" class="chip-btn" data-sugg="${esc(s)}">${esc(s)}</button>`).join('')}</div>`, 'ccs-empty');
+    // A host can say what an empty chat shows (App Builder: the app's own starters).
+    const em = ctx.empty?.() || {};
+    const starters = em.starters || ['Explain how this project is laid out', 'Review my uncommitted changes', 'Find and fix a bug', 'Write tests for the code I changed'];
+    add(`<img class="cl-logo" src="/img/claude-code.svg" alt="" draggable="false"><h3>${esc(em.title || 'What should we work on?')}</h3>
+      <p>${em.text ? esc(em.text) : `Claude Code works in <b>${esc(ctx.cwdLabel?.() || 'this folder')}</b> with your settings, CLAUDE.md and skills.`}</p>
+      <div class="ccs-sugg">${starters.map((s) => `<button type="button" class="chip-btn" data-sugg="${esc(s)}">${esc(s)}</button>`).join('')}</div>`, 'ccs-empty');
     drawFolder();
   }
   // Nothing said yet: the session can still move to another folder (the app makes it a new one there).
@@ -375,18 +381,20 @@ export function createSession(id, ctx = {}) {
         if (!liveRaf)
           liveRaf = setTimeout(() => {
             liveRaf = 0;
-            if (live) live.innerHTML = markdown(live._text);
+            if (live) live.innerHTML = markdown(ctx.transform ? ctx.transform(live._text, false) : live._text);
             toBottom();
           }, 80);
         break;
       case 'assistant':
         clearTimeout(liveRaf);
         liveRaf = 0;
+        // The host may take part of the text for itself (App Builder's suggestions block becomes buttons).
+        const shown = ctx.transform ? ctx.transform(e.text, true, replay) : e.text;
         if (live && !replay) {
           live.classList.remove('ccs-live');
-          live.innerHTML = markdown(e.text);
+          live.innerHTML = markdown(shown);
           live = null;
-        } else add(markdown(e.text), 'ccs-bot');
+        } else add(markdown(shown), 'ccs-bot');
         lastCard = null;
         toBottom();
         break;
@@ -886,7 +894,11 @@ export function createSession(id, ctx = {}) {
     if (textArg == null) setDraft('');
     histAt = -1;
     try {
-      state = { ...state, ...(await shell.agentChat.send(id, text, { images, imagePaths, queue: true, now })) };
+      // The host may add to the message (App Builder: the comments pinned on the app, with a screenshot).
+      const extra = (await ctx.beforeSend?.(text)) || {};
+      const sendText = typeof extra.text === 'string' ? extra.text : text;
+      if (Array.isArray(extra.images)) images.push(...extra.images);
+      state = { ...state, ...(await shell.agentChat.send(id, sendText, { images, imagePaths, queue: true, now })) };
       drawState();
       stick = true;
       toBottom(true);

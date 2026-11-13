@@ -10,7 +10,7 @@ features and deployment; this file is for working on the code.
 
 - `electron/main.cjs`: the main process (windows, IPC, protocols, shortcuts). Small modules beside it: `ossystem.cjs`,
   `oslock.cjs`, `ospower.cjs` + `os/leafdeck-power` (Settings → Power: modes, idle, lid, charging), `osnotify.cjs` + `notify-helper.py`, `terminal.cjs` + `pty-helper.py` (Leafdeck OS; terminals and
-  notifications run in `leafdeckd.cjs`, a separate user service, when it's there), `userapps.cjs` + `agentchat.cjs` (App Builder;
+  notifications run in `leafdeckd.cjs`, a separate user service, when it's there), `userapps.cjs` + `agentchat.cjs` (App Builder; `appbundle.cjs` is what an app may contain, shared with the store service, and `appstore.cjs` the store on this computer (`public/js/apps/store.js` is its window, the Leafdeck Store app): signed installs, takedowns, Publish;
   `agentchat.cjs` is every headless Claude Code chat; `chathost.cjs` keeps their processes in `leafdeckd`, so they carry on through a restart of Leafdeck), `codegit.cjs` (the Claude Code app's git: changes, diffs, worktrees),
   `screens.cjs` + `public/js/screens.js` (one surface per screen, `LEAFDECK_PER_SCREEN=1`: a page per screen, the same UI
   with `?screen=<connector>`; pages share data through store.js pulls and hand windows over when they're dragged to
@@ -34,6 +34,7 @@ features and deployment; this file is for working on the code.
   `claudeconfig.cjs` (Claude Settings: an allow-list by path shape of what the app may read and change, what Claude Code loads
   (`probe`, a throwaway process asked over control requests), the undoable History, and `chatLaunch`/`chatMayEdit`, the `@claudesettings` chat's permissions).
   `adminwhy.cjs` (the admin password popup says why when Claude's asking: polkit's pid → the Claude session above it → the running Bash call's description).
+  `uiwatch.cjs` (when the UI page stops answering or drawing, the log says which and where: `journalctl -b | grep '\[ui\]'`).
   `safemode.cjs` + `SAFEMODE.md` (Leafdeck OS safe mode: the report, the fixes, Claude's briefing; `LEAFDECK_SAFE=1`,
   set by `os/leafdeck-session --safe`), `greeter.cjs` (the sign-in screen), `rescue.cjs` (Ctrl+Alt+Delete).
 - `public/js/`: the UI. `wm.js` (windows, dock, menus; `mergeTitleBar` for an app whose own top row is its title bar), `menubar.js`, `apps/*.js` (each app calls `registerApp`),
@@ -56,6 +57,11 @@ features and deployment; this file is for working on the code.
 - `public/js/siteeditor/inpage.js`: the Site Editor's page half (`apps/siteeditor.js` is the app): self-contained like
   Designer's `inpage.js`, it selects elements, shows changes live, edits text in place and pins comments, reporting
   through a DOM event the webview preload forwards. "Edit in Designer" and Designer's "Send back to site" connect the two.
+  `public/js/siteeditor/inspector.js` is the Edit panel (auto layout, size, position, the spacing box, typography, fill,
+  border, effects, any other CSS, the page's rules): it draws what `siteeditor.cjs`'s `inspect` reads and asks for
+  changes through `setProps`; a change can be scoped to a class, a state (`:hover`, forced over CDP) or a width
+  (`@media`). Styles in `public/css/siteeditor.css`. Test it with `~/ldtests/siteeditor/run.sh t-inspector.mjs` (its own
+  headless sandbox on port 9349, a test site on 8871; the older `t-siteeditor*.mjs` run through it too).
 - `public/js/apps/claudesettings.js`: Claude Settings (what Claude reads, instructions, memory, skills, agents, permissions, hooks,
   connections, behavior, History, with a chat beside them), styles in `public/css/claudesettings.css`. Test it with
   `~/ldtests/claudesettings/run.sh <test>.mjs` (`t-pages`, `t-files`, `t-chat`: real Claude turns on Haiku in a scratch project, on port 9353), and

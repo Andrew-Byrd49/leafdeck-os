@@ -212,6 +212,18 @@ const TYPES = {
     },
   },
 
+  performance: {
+    name: 'Performance',
+    desc: 'CPU, memory, temperature, battery and FPS, live',
+    icon: 'activity',
+    sizes: ['s', 'm', 'l'],
+    render(w) {
+      startPerf();
+      const body = shell ? perfBody(w.size) : empty('activity', 'Only in the Leafdeck app');
+      return `${head('taskmanager', 'activity', 'Performance')}<div class="w-perf" data-pf="${w.size}">${body}</div>`;
+    },
+  },
+
   quicknote: {
     name: 'Quick note',
     desc: 'A sticky note on your desktop',
@@ -684,7 +696,7 @@ export function addWidget(type, size, board = 'desktop', at = null) {
 
 /* ---------------- Places on the desktop ---------------- */
 
-const MARGIN = 20; // from the edges of the free space, where widgets snap and start
+const MARGIN = 20; // the least between a widget and the edges of the free space, and where widgets start
 const SNAP = 8;
 const SAFE_BANNER = 42; // safe mode's banner, under the main screen's menu bar
 
@@ -693,12 +705,14 @@ const sizeOf = (size) => {
   return { w: c * CELL + (c - 1) * GAP, h: r * CELL + (r - 1) * GAP };
 };
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(v, Math.max(lo, hi)));
-const overlaps = (a, b) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+/** Two widgets closer than GAP (or on top of each other): no place may leave them like that. */
+const crowds = (a, b) => a.x < b.x + b.w + GAP && b.x < a.x + a.w + GAP && a.y < b.y + b.h + GAP && b.y < a.y + a.h + GAP;
 /** A window too narrow to arrange anything in: the desktop's board stays a grid (app.css). */
 const narrow = () => matchMedia('(max-width: 760px)').matches;
 const screenIndexAt = (x, y) => screens().findIndex((s) => x >= s.x && x < s.x + s.w && y >= s.y && y < s.y + s.h);
 
-/** Screen n's edges for widgets: below its menu bar, down to its bottom edge; `floor` is the top of its Dock, if any. */
+/** Screen n's edges for widgets: below its menu bar, down to its bottom edge; `floor` is the top of its Dock, if any
+    (and of the on-screen keyboard). Widgets stay MARGIN inside them, above the floor. */
 function edgesOf(n) {
   const all = screens();
   const i = all[n] ? n : 0;
@@ -706,11 +720,31 @@ function edgesOf(n) {
   const top = a.y + (i === 0 && document.documentElement.dataset.safe ? SAFE_BANNER : 0);
   return { x: all[i].x, y: top, r: all[i].x + all[i].w, b: all[i].y + all[i].h, floor: a.y + a.h };
 }
-/** A widget's corner kept on screen n: a widget is never cut off by an edge or across two screens. */
+/** A widget's corner kept on screen n, MARGIN from its edges: never cut off, across two screens or against an edge. */
 function keepOn(n, x, y, size) {
   const e = edgesOf(n);
   const { w, h } = sizeOf(size);
-  return { x: clamp(x, e.x, e.r - w), y: clamp(y, e.y, e.b - h) };
+  return { x: clamp(x, e.x + MARGIN, e.r - MARGIN - w), y: clamp(y, e.y + MARGIN, e.floor - MARGIN - h) };
+}
+/** The place nearest (x, y) on screen n where a widget of `size` is GAP clear of `others` (their spots on that screen).
+    The nearest one always has each coordinate either as asked, against an edge, or GAP off another widget's side.
+    With no room left on the screen, it's the place asked for. */
+function clearOf(n, x, y, size, others) {
+  const box = sizeOf(size);
+  const at = keepOn(n, x, y, size);
+  const free = (p) => !others.some((o) => crowds(o, { ...p, ...box }));
+  if (free(at)) return at;
+  const xs = [at.x, ...others.flatMap((o) => [o.x - GAP - box.w, o.x + o.w + GAP])];
+  const ys = [at.y, ...others.flatMap((o) => [o.y - GAP - box.h, o.y + o.h + GAP])];
+  let best = null;
+  let dist = Infinity;
+  for (const cx of xs)
+    for (const cy of ys) {
+      const p = keepOn(n, cx, cy, size);
+      const d = Math.hypot(p.x - at.x, p.y - at.y);
+      if (d < dist && free(p)) [best, dist] = [p, d];
+    }
+  return best || at;
 }
 const posOf = (n, x, y) => {
   const s = screens()[n] || screens()[0];
@@ -744,11 +778,11 @@ function flow(loose, taken, spots) {
       for (let r = 0; !spot && r + rh <= rows; r++)
         for (let c = 0; !spot && c + cw <= cols; c++) {
           const t = { x: origin + c * step, y: e.y + MARGIN + r * step, ...box };
-          if (![...taken, ...here].some((o) => overlaps(o, t))) spot = t;
+          if (![...taken, ...here].some((o) => crowds(o, t))) spot = t;
         }
       if (!spot) {
         fits = false;
-        spot = { x: clamp(origin, e.x, e.r - box.w), y: e.y + MARGIN, ...box }; // no room anywhere: on top of the others
+        spot = { ...keepOn(n, origin, e.y + MARGIN, w.size), ...box }; // no room anywhere: on top of the others
       }
       here.push({ ...spot, id: w.id, n });
     }
@@ -774,9 +808,12 @@ function arrangement(list = layout('desktop')) {
     // Its screen isn't connected: the main one until it's back. Nothing is saved, so it goes back then too.
     const n = Math.max(0, all.findIndex((s) => s.name && s.name === w.pos.screen));
     const s = all[n];
-    spots.set(w.id, { ...keepOn(n, s.x + w.pos.x, s.y + w.pos.y, w.size), ...sizeOf(w.size), id: w.id, n });
+    // Clear of the ones before it in the list (a saved place can crowd another after a resize, a smaller screen, or
+    // from before widgets kept apart). Only where it shows: the saved place stays.
+    const beside = [...spots.values()].filter((o) => o.n === n);
+    spots.set(w.id, { ...clearOf(n, s.x + w.pos.x, s.y + w.pos.y, w.size, beside), ...sizeOf(w.size), id: w.id, n });
   }
-  if (loose.length) flow(loose, [...spots.values()], spots);
+  if (loose.length) flow(loose, [...spots.values()].filter((o) => o.n === widgetsHome().n), spots);
   return spots;
 }
 
@@ -948,7 +985,8 @@ export function openWidgetGallery(board = 'desktop', at = null) {
   });
 }
 
-/* Drag anywhere (the desktop): on the screen under the pointer, snapping to the free space's edges and to other widgets. Alt: no snapping. */
+/* Drag anywhere (the desktop): on the screen under the pointer, snapping to the free space's edges and to other widgets
+   (Alt: no snapping), and never closer than GAP to another widget: it slides around them. */
 
 /** `pos` moved to the nearest of `starts` (for its near edge) or `ends` (for its far edge), when one is within SNAP. */
 function snapped(pos, size, starts, ends) {
@@ -984,13 +1022,14 @@ function startMove(node, w, e) {
     const over = screenIndexAt(ev.clientX, ev.clientY);
     if (over >= 0) n = over; // in a gap beside a smaller screen: still the last one
     ({ x, y } = keepOn(n, start.x + ev.clientX - sx, start.y + ev.clientY - sy, w.size));
+    // Where the others show without this one (it's last in the list once dropped, so they don't make way for it).
+    const others = [...arrangement(layout('desktop').filter((o) => o.id !== w.id)).values()].filter((o) => o.n === n);
     if (!ev.altKey) {
       const edge = edgesOf(n);
-      const others = [...arrangement().values()].filter((o) => o.id !== w.id && o.n === n);
       x = snapped(x, W, [edge.x + MARGIN, ...others.flatMap((o) => [o.x, o.x + o.w + GAP])], [edge.r - MARGIN, ...others.flatMap((o) => [o.x + o.w, o.x - GAP])]);
       y = snapped(y, H, [edge.y + MARGIN, ...others.flatMap((o) => [o.y, o.y + o.h + GAP])], [edge.floor - MARGIN, ...others.flatMap((o) => [o.y + o.h, o.y - GAP])]);
-      ({ x, y } = keepOn(n, x, y, w.size));
     }
+    ({ x, y } = clearOf(n, x, y, w.size, others));
     node.style.left = `${x}px`;
     node.style.top = `${y}px`;
   };
@@ -1083,8 +1122,8 @@ function startResize(node, w, e) {
       node.className = `widget w-${size} resizing`;
       node.innerHTML = t.render({ ...w, size }) + editControls(w);
       if (spot) {
-        // Grown past an edge, it shows inside it; the saved place stays, for when it's smaller again.
-        const p = keepOn(spot.n, spot.x, spot.y, size);
+        // Grown past an edge or into another widget, it shows clear of them; the saved place stays, for when it's smaller again.
+        const p = arrangement(layout('desktop').map((o) => (o.id === w.id ? { ...o, size } : o)))?.get(w.id) || keepOn(spot.n, spot.x, spot.y, size);
         Object.assign(node.style, { left: `${p.x}px`, top: `${p.y}px` });
       }
     }
@@ -1215,7 +1254,7 @@ function bindBoard(root, board) {
   });
 }
 
-/* Performance widget: the computer's CPU, memory, temperature and battery, sampled through the Task Manager's channel
+/* Performance widget: the computer's CPU, memory, temperature, battery and frames per screen, sampled through the Task Manager's channel
    every couple of seconds while one shows. Each sample redraws the widgets' bodies in place; a full render (store changes)
    shows the latest sample. */
 const PERF_EVERY = 2000;
@@ -1255,9 +1294,11 @@ async function samplePerf() {
     return;
   }
   if (document.hidden) return;
-  let sys;
+  let sys, fps;
   try {
-    sys = await shell.perf.system();
+    // Waiting for the frame count also means the repaint below falls outside the second it measures, so the widget
+    // doesn't count its own updates.
+    [sys, fps] = await Promise.all([shell.perf.system(), shell.perf.screenFps?.().catch(() => null)]);
   } catch {
     return;
   }
@@ -1268,7 +1309,7 @@ async function samplePerf() {
   // Usage is measured between calls: the very first sample in the app's life has nothing to measure against.
   if (perf.ticks++ || sys.cpu.usage > 0) push(perf.cpu, sys.cpu.usage);
   push(perf.memory, sys.memory.used);
-  perf.sys = sys;
+  perf.sys = { ...sys, fps };
   for (const b of bodies) {
     if (!b.clientWidth) continue; // a hidden board; it's rendered when it shows
     b.innerHTML = perfBody(b.dataset.pf);
@@ -1287,12 +1328,19 @@ function perfBody(size) {
   const memBar = bar(`Memory · ${perfGb(m.used)} of ${perfGb(m.total, 0)} GB`, (m.used / m.total) * 100);
   const batBar = b ? bar(`Battery · ${b.percent}%${b.charging ? ', charging' : ''}`, b.percent, b.charging ? 'good' : b.percent <= 15 ? 'bad' : '') : '';
   const graph = (key) => `<canvas class="w-perf-graph" data-graph="${key}" style="color:${PERF_COLOR[key]}"></canvas>`;
+  // Frames that really reached each screen: 0 is a screen with nothing changing on it.
+  const screens = Object.entries(p.fps || {});
+  const fpsTitle = `Frames per second reaching each screen: ${esc(screens.map(([name, n]) => `${name} ${n}`).join(', '))}`;
+  const fpsAll = screens.map(([, n]) => n).join(' · ');
+  const fpsTag = (value) => (screens.length ? `<span class="w-perf-fps" title="${fpsTitle}">FPS <b>${value}</b></span>` : '');
   if (size === 's') {
-    return metric(perfPct(cpu.usage), `CPU${temp ? ` · <span class="${tempTone}">${temp}</span>` : ''}`, `<div class="w-bars">${memBar}${batBar}</div>`);
+    // No room for every screen here: the busiest one (the tooltip has them all).
+    const busiest = fpsTag(Math.max(...screens.map(([, n]) => n)));
+    return metric(perfPct(cpu.usage) + busiest, `CPU${temp ? ` · <span class="${tempTone}">${temp}</span>` : ''}`, `<div class="w-bars">${memBar}${batBar}</div>`);
   }
   if (size === 'm') {
     return metric(
-      perfPct(cpu.usage),
+      perfPct(cpu.usage) + fpsTag(fpsAll),
       `CPU · ${(cpu.speed / 1000).toFixed(1)} GHz${temp ? ` · <span class="${tempTone}">${temp}</span>` : ''}`,
       `<div class="w-perf-spark">${graph('cpu')}</div><div class="w-bars">${memBar}${batBar}</div>`,
     );
@@ -1303,6 +1351,7 @@ function perfBody(size) {
   const fan = p.fan != null ? `<span>Fan <b>${p.fan ? `${p.fan} rpm` : 'off'}</b></span>` : '';
   return `<div class="w-perf-g"><div class="w-perf-lab"><span>CPU</span><b>${perfPct(cpu.usage)} · ${(cpu.speed / 1000).toFixed(1)} GHz${temp ? ` · <span class="${tempTone}">${temp}</span>` : ''}</b></div>${graph('cpu')}</div>
     <div class="w-perf-g"><div class="w-perf-lab"><span>Memory</span><b>${perfGb(m.used)} of ${perfGb(m.total, 0)} GB</b></div>${graph('memory')}</div>
+    ${screens.length ? `<div class="w-perf-lab" title="${fpsTitle}"><span>FPS</span><b>${fpsAll}</b></div>` : ''}
     ${batBar ? `<div class="w-bars">${batBar}</div>` : ''}
     <div class="w-perf-foot">${disk}${netText}${fan}<span>Up <b>${perfUp(cpu.uptime)}</b></span></div>`;
 }

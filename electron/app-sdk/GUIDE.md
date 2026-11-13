@@ -167,6 +167,20 @@ If no `leafdeck_*` tools are available, the session wasn't started from App Buil
 
 Each new permission makes Leafdeck ask the user before the app runs again. If a screenshot shows a permission prompt, ask the user to approve it in Leafdeck; never try to click it yourself.
 
+## Publishing to the store
+
+Only if the person says they want to publish. Verified publishers send an app to the Leafdeck store from its page in
+App Builder. Store apps run under stricter rules than the apps someone builds for themselves, so build for them from
+the start if the app is meant to be shared:
+
+- No inline `<script>` code and no `onclick=`-style attributes: put code in `.js` files and use `addEventListener`.
+- Images from the internet need that host in `network:<host>`, the same as `fetch`.
+- No `local:<port>` permission, because the store can't include or check the program it talks to.
+- `manifest.json` needs a name and a version like `1.2.3`. Only the file types the app serves are allowed, up to 20 MB
+  in all. Hidden files, `node_modules`, `BRIEF.md`, `CLAUDE.md` and `AGENTS.md` are left out when publishing.
+- Never leave a key or token in the app's files. Publishing refuses files that look like they contain one.
+- A store app's link out asks the person first, unless they've approved that site with `network:<host>`.
+
 ## Rules
 
 - Stay inside this folder. Don't modify Leafdeck itself or other apps.

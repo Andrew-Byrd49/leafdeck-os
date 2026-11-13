@@ -1,6 +1,7 @@
 # Leafdeck companion API
 
-How the Android companion app, the desktop app and the Worker talk to each other.
+How a companion device (a phone app, for instance), the desktop app and the Worker talk to each other. This is the
+web version's API; no companion app is part of this repository.
 Everything here is served by the Worker (`src/index.js`) at `https://<your-worker>/api/...`.
 
 ## Authentication

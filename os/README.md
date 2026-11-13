@@ -2,7 +2,7 @@
 
 Leafdeck as the whole computer: Fedora underneath (kernel, drivers, security updates), Leafdeck as the only thing on screen.
 The design, decisions and roadmap are in [ARCHITECTURE.md](ARCHITECTURE.md); the image is built from `os/image/`. This
-README covers the development setup on Fedora Workstation.
+README covers the session and the development setup on Fedora Workstation; to install it, start with [INSTALL.md](../INSTALL.md).
 Plan: Phase 0 hardware check → 1 Leafdeck on Linux → **2 Leafdeck as the session (in progress)** → 3 installable image → 4 native apps in Leafdeck's window manager.
 
 ## What's here
@@ -14,6 +14,12 @@ Plan: Phase 0 hardware check → 1 Leafdeck on Linux → **2 Leafdeck as the ses
 - In the app: `electron/ossystem.cjs` (power, sound, brightness, network, battery through systemd/logind, PipeWire, brightnessctl, NetworkManager and `/sys`), `electron/osnotify.cjs` + `notify-helper.py` (notifications), `public/js/ostray.js` (menu bar tray and its panels), `public/js/osk.js` (on-screen keyboard). Session mode in `electron/main.cjs` (`SESSION`): no minimize/maximize, full screen, Sign out instead of Quit.
 
 ## Install on Fedora
+
+**One step:** `os/setup-fedora.sh` does everything below and more (Leafdeck's cage, Node.js, Claude Code, Leafdeck as the
+default session), can be run again any time, and `os/setup-fedora.sh --uninstall` undoes it. The walkthrough for a new
+computer, including Fedora beside Windows, is [INSTALL.md](../INSTALL.md).
+
+By hand, the least a session needs:
 
 ```sh
 sudo dnf install cage wlr-randr brightnessctl

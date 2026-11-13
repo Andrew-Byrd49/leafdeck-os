@@ -1,11 +1,50 @@
-# Leafdeck
+# Leafdeck OS
 
-Leafdeck is a private, macOS-style desktop for your work, in one place. It's a single Cloudflare Worker: static UI in `public/` and a small JSON API backed by D1.
+**Give Claude an OS.** Leafdeck OS is a computer for your work with Claude built in: a macOS-style desktop where websites
+are windows, your contacts, tasks, calendar and notes live on the computer itself, and Claude Code can see the screen, build
+you apps, and change the system around how you work. Underneath it's Fedora Linux (the kernel, drivers and security
+updates); Leafdeck is everything you see.
 
-**Apps:** Contacts, Tasks, Calendar, Notes, Connections, Settings.
-**Desktop:** widgets you can drag anywhere on any screen, desktop icons, a Dock with magnification, a search and address bar in the middle of the menu bar (Ctrl/⌘ K, Ctrl L or `/`), draggable and resizable windows, right-click menus, and a Business / Nonprofit / All workspace switcher in the menu bar.
+**Apps:** Contacts, Tasks, Calendar, Notes, Files, Terminal, Claude Code, App Builder, the Leafdeck Store, Designer, Site Editor, Image Editor, Settings.
+**Desktop:** widgets you can drag anywhere on any screen, desktop icons, a Dock with magnification, a search and address bar in the middle of the menu bar (Ctrl K, Ctrl L or `/`), draggable and resizable windows, and right-click menus.
 
-## Run locally
+## Install
+
+Leafdeck OS installs on top of Fedora Workstation, beside Windows if you want to keep it. **[INSTALL.md](INSTALL.md) walks
+through all of it**, including putting Fedora next to Windows if you've never used Linux. The short version, on a fresh
+Fedora Workstation:
+
+```sh
+sudo dnf install -y git
+git clone https://github.com/Andrew-Byrd49/leafdeck-os.git
+leafdeck-os/os/setup-fedora.sh
+```
+
+Then restart and sign in: the computer starts into Leafdeck.
+
+- **What you need:** a 64-bit Intel or AMD computer that runs Fedora Workstation 44, an internet connection for the
+  setup, and a Claude account for the Claude features (the rest works without one).
+- **What it's been run on:** a Lenovo Yoga Book 9 and a virtual machine. Other hardware should work wherever Fedora
+  does, but hasn't been checked; the setup ends with a hardware report you can attach to an issue.
+- **It's early.** This is the development setup, run from the source in the folder you cloned. There's no installer
+  image to download yet.
+- **Getting out:** GNOME stays installed and is one click away on the sign-in screen, and
+  `os/setup-fedora.sh --uninstall` takes Leafdeck OS off again. Nothing in the setup touches Windows or other disks.
+
+What's in the session, its settings and its known gaps: [os/README.md](os/README.md). Where it's headed:
+[os/ARCHITECTURE.md](os/ARCHITECTURE.md).
+
+## Your data
+
+Everything is kept on the computer, in Leafdeck's profile (`~/.config/Leafdeck`: `leafdeck.db` and `media/`). There's no
+server and no account. Settings → Data exports and imports a backup.
+
+## The web version (optional)
+
+The same code also runs as a single Cloudflare Worker (static UI in `public/`, a small JSON API in `src/` on D1), for
+using Leafdeck's apps in a browser. Leafdeck OS doesn't need it.
+
+### Run locally
 
 ```bash
 npm install
@@ -14,7 +53,7 @@ npm run dev
 
 Then open http://localhost:8787. The local D1 database lives in `.wrangler/`.
 
-## Deploy
+### Deploy
 
 ```bash
 npx wrangler d1 create leafdeck-db
@@ -32,7 +71,7 @@ The Leafdeck app is a full browser built into the desktop. Websites open in desk
 
 ### Install
 
-Leafdeck runs as **Leafdeck OS** (see `os/README.md`), where it is the whole computer. On another Linux desktop, `npm run app:build:linux` builds an AppImage and an rpm in `dist/`.
+Leafdeck runs as **Leafdeck OS** (see [Install](#install)), where it is the whole computer. On another Linux desktop, `npm run app:build:linux` builds an AppImage and an rpm in `dist/`.
 
 > **The Windows browser is discontinued.** Its last release, 1.17.0, is archived as the tag `windows-browser-v1.17.0` (branch `windows-browser`). Installed Windows copies keep working on that version but get no more updates. Build it from that tag if you ever need it again; `main` no longer builds for Windows or is tested there.
 
@@ -91,7 +130,7 @@ npm run app
   - **Lazy restore:** after restarting Leafdeck, only the front window loads right away. On Leafdeck OS, shutting down or restarting the computer closes everything, so it starts with no windows open.
   - **Exceptions:** sites playing audio, sites with DevTools open, and sites you mark **Keep … Awake** (in the site's ⋯ menu) are never paused or slept.
   - **Settings:** Settings → Performance.
-- **Server:** on first launch the app points at `http://localhost:8787`. Set your deployed Worker in Settings → Leafdeck app → Server address. If it's behind Cloudflare Access, click **Sign in to server** once, or save an Access service token. `LEAFDECK_URL` overrides the saved address.
+- **Data:** kept on this computer, with no server (see [Your data](#your-data)). Settings → Data can import once from a deployed web version.
 - **Logins across connections:** all connections share one login session. "Use a separate login" on a connection gives it its own session, for example for a second account. To use several accounts on the same site at once, right-click the connection and choose **Open in New Session**: each session (Session 2, Session 3, …) keeps its own logins, is listed in that menu to reopen later, and shows its number in the window title.
 
 | Shortcut | Action |
@@ -216,7 +255,7 @@ If the Worker is behind Cloudflare Access, Google's redirect has to reach it: ad
 
 ## Lock it down
 
-This holds business data, so protect it before you use it for real:
+The web version holds your data on a server, so protect it before you use it for real (Leafdeck OS keeps its data on the computer and needs none of this):
 
 - **Recommended:** put the Worker behind **Cloudflare Access** (Zero Trust → Access → Applications → Self-hosted) and allow only your email.
 - **Optional extra:** `npx wrangler secret put API_TOKEN`. Every `/api` call then needs that token, and the browser asks for it once.

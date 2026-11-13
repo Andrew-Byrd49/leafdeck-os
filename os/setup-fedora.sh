@@ -1,18 +1,23 @@
 #!/usr/bin/env bash
 # Turn a fresh Fedora Workstation install into Leafdeck OS (see os/README.md).
 #
-#   ~/leafdeck/os/setup-fedora.sh            # run from a checkout of the repository
-#   ~/leafdeck/os/setup-fedora.sh --local    # also run a local Leafdeck server (development)
+#   os/setup-fedora.sh              # run from a checkout of the repository, wherever it is
+#   os/setup-fedora.sh --local      # also run a local Leafdeck server (development)
+#   os/setup-fedora.sh --uninstall  # take Leafdeck OS off again: back to GNOME, as Fedora was
 #
 # Safe to run again: each step checks what's already done. GNOME stays installed, so the login screen can still start a
 # GNOME session if Leafdeck ever won't. Nothing here touches Windows or other partitions.
+# Leafdeck runs from this checkout, so keep the folder where it is (or run this again after moving it).
 set -euo pipefail
 
 LOCAL_SERVER=0
+UNINSTALL=0
 for a in "$@"; do
   case "$a" in
     --local) LOCAL_SERVER=1 ;;
-    -h|--help) sed -n '2,9p' "$0"; exit 0 ;;
+    --uninstall) UNINSTALL=1 ;;
+    -h|--help) sed -n '2,11p' "$0"; exit 0 ;;
+    *) echo "Unknown option $a (try --help)"; exit 1 ;;
   esac
 done
 
@@ -23,6 +28,64 @@ warn() { printf '\033[1;33m!\033[0m %s\n' "$*"; }
 [ "$(id -u)" -ne 0 ] || { echo "Run this as your own user, not root (it asks for sudo when needed)."; exit 1; }
 grep -q '^ID=fedora' /etc/os-release || { echo "This script is for Fedora."; exit 1; }
 [ -f "$REPO/os/leafdeck-session" ] || { echo "Run it from a Leafdeck checkout (os/setup-fedora.sh)."; exit 1; }
+
+# Everything the setup below puts on the computer, taken off again. What stays: the packages it installed (cage and the
+# rest are small and harmless), Node.js in ~/.local, Claude Code, this folder, and Leafdeck's own data (~/.config/Leafdeck).
+uninstall() {
+  user=$(id -un)
+  if systemctl is-enabled greetd.service >/dev/null 2>&1; then
+    say "Leafdeck's sign-in and boot screens"
+    "$REPO/os/use-leafdeck-signin.sh" --undo
+  fi
+
+  say "GNOME as the session at the login screen"
+  if sudo test -f "/var/lib/AccountsService/users/$user"; then
+    sudo sed -i -e '/^Session=leafdeck$/d' -e '/^XSession=leafdeck$/d' "/var/lib/AccountsService/users/$user"
+  fi
+  echo "  done"
+
+  say "The Leafdeck session and its services"
+  systemctl --user disable --now leafdeck-dev-server.service >/dev/null 2>&1 || true
+  rm -f "$HOME/.config/systemd/user/leafdeck-dev-server.service" "$HOME/.config/systemd/user/leafdeckd.service" "$HOME/.config/leafdeck-session.env"
+  sudo rm -f /usr/local/bin/leafdeck-session /usr/share/wayland-sessions/leafdeck.desktop /etc/tmpfiles.d/leafdeck.conf \
+    /etc/systemd/user/leafdeck-session.target /etc/systemd/user/app-leafdeck-.scope.d/50-leafdeck.conf \
+    /etc/systemd/system/session-.scope.d/50-leafdeck.conf /etc/security/limits.d/30-leafdeck.conf \
+    /usr/local/bin/cage /usr/local/bin/cage.prev
+  sudo rmdir /etc/systemd/user/app-leafdeck-.scope.d /etc/systemd/system/session-.scope.d 2>/dev/null || true
+  echo "  removed (Fedora's own cage is still installed)"
+
+  say "Links and pictures back to Fedora's programs"
+  # Only our own copy of the system-wide list: one that's been changed since is someone else's to keep.
+  if [ -f /etc/xdg/mimeapps.list ] && grep -q 'leafdeck-open' /etc/xdg/mimeapps.list; then sudo rm -f /etc/xdg/mimeapps.list; fi
+  [ -f "$HOME/.config/mimeapps.list" ] && sed -i '/=leafdeck-open\.desktop;\?$/d' "$HOME/.config/mimeapps.list"
+  sudo rm -f /usr/local/bin/leafdeck-open /usr/local/share/applications/leafdeck-open.desktop /etc/environment.d/60-leafdeck-browser.conf \
+    /usr/share/xdg-desktop-portal/portals/leafdeck.portal /usr/share/xdg-desktop-portal/leafdeck-portals.conf
+  sudo update-desktop-database -q /usr/local/share/applications 2>/dev/null || true
+  echo "  done"
+
+  say "Power, touchscreen and Restart into Windows helpers"
+  sudo rm -f /usr/local/sbin/leafdeck-boot-windows /etc/sudoers.d/leafdeck-boot-windows /usr/local/sbin/leafdeck-power /etc/sudoers.d/leafdeck-power \
+    /etc/systemd/logind.conf.d/50-leafdeck.conf /etc/udev/rules.d/70-leafdeck-touch.rules /etc/udev/rules.d/70-leafdeck-keys.rules
+  sudo systemctl kill -s HUP systemd-logind
+  sudo udevadm control --reload
+  if [ -f /etc/tuned/ppd.conf ]; then
+    sudo sed -i 's/^performance=leafdeck-performance$/performance=throughput-performance/' /etc/tuned/ppd.conf
+    sudo systemctl try-restart tuned tuned-ppd >/dev/null 2>&1 || true
+  fi
+  sudo rm -rf /etc/tuned/profiles/leafdeck-performance
+  sudo systemctl daemon-reload
+  systemctl --user daemon-reload 2>/dev/null || true
+  echo "  removed"
+
+  say "Done"
+  cat <<DONE
+Restart the computer: it starts into GNOME, as Fedora did before.
+  - Still here, yours to keep or delete: this folder ($REPO), Leafdeck's data (~/.config/Leafdeck),
+    Node.js (~/.local) and Claude Code.
+  - To put Leafdeck OS back: $REPO/os/setup-fedora.sh
+DONE
+}
+if [ "$UNINSTALL" = 1 ]; then uninstall; exit 0; fi
 
 say "System packages (cage, wayvnc and Xwayland for the app display, wlr-randr, brightnessctl, grim, GitHub CLI, whisper.cpp bindings for talking to Claude)"
 sudo dnf install -y -q cage wayvnc xorg-x11-server-Xwayland wlr-randr brightnessctl grim git gh python3 efibootmgr bluez python3-pywhispercpp
@@ -196,6 +259,8 @@ say "Done"
 cat <<DONE
 Sign out (or restart) and sign in: Leafdeck is the default session now.
   - Lock: Ctrl+Alt+L. Restart Leafdeck after code changes: Leafdeck menu.
-  - Terminal: search for "Terminal" (Ctrl+K). Claude Code: cd ~/leafdeck && claude
+  - Terminal: search for "Terminal" (Ctrl+K). Claude Code: cd $REPO && claude
   - To get back to GNOME for a moment: sign out, click your name, then the gear icon, and pick GNOME.
+  - To take Leafdeck OS off again: $REPO/os/setup-fedora.sh --uninstall
+  - Leafdeck runs from this folder ($REPO): keep it where it is.
 DONE
